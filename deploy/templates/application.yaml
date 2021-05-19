@@ -1,0 +1,7 @@
+---
+kind: Application
+apiVersion: namespace.squarespace.net/v1
+metadata:
+  name: {{ .Values.k8s.namespace }}
+spec:
+  team: {{ .Values.k8s.team }}

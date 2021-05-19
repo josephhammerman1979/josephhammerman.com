@@ -1,0 +1,20 @@
+{{ define "base" }}
+<html lang="en">
+  <head>
+    <title>squaremeet.net</title>
+    {{ template "head" . }}
+    <link rel="stylesheet" href="/css/app.css">
+  </head>
+  <body>
+    <div class="section-div">
+      <h3>squaremeet.net</h3>
+      <a href="/">home</a>
+    </div>
+    {{ template "main" . }}
+    <div id="footer">
+      <a target="_blank" href="https://code.squarespace.net/db/squaremeet">view source code</a> |
+      <p>© {{ .Year }} Joe Hammerman</p>
+    </div>
+  </body>
+</html>
+{{ end }}

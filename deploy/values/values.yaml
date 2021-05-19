@@ -1,0 +1,9 @@
+---
+k8s:
+  team: Databases
+  name: squaremeet
+  namespace: squaremeet
+
+# mapped env vars
+env:
+  EXAMPLE_ENV_VAR: "true"

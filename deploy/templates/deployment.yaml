@@ -1,0 +1,45 @@
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{ .Values.k8s.name }}
+  namespace: {{ .Values.k8s.name }}
+  labels:
+    service: {{ .Values.k8s.name }}
+    serviceOwner: {{ .Values.k8s.team }}
+    serviceClass: go
+spec:
+  selector:
+    matchLabels:
+      service: {{ .Values.k8s.name }}
+  template:
+    metadata:
+      name: {{ .Values.k8s.name }}
+      namespace: {{ .Values.k8s.name }}
+      labels:
+        service: {{ .Values.k8s.name }}
+        serviceOwner: {{ .Values.k8s.team }}
+        serviceClass: go
+    spec:
+      containers:
+        - name: {{ .Values.k8s.name }}
+          image: artifactory.squarespace.net/db/squaremeet:${DRONE_COMMIT_SHA}
+          env:
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- range $name, $secret := .Values.secrets.env }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.k8s.name }}-envars
+                  key: {{ $name }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
