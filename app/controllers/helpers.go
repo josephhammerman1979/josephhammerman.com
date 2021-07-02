@@ -1,8 +1,6 @@
 package controllers
 
 import (
-	// "code.squarespace.net/db/squaremeet/app/data"
-	// "context"
 	"embed"
 	"encoding/base64"
 	"errors"
@@ -11,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	// "time"
 )
 
 var (

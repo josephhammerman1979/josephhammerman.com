@@ -1,7 +1,7 @@
 package main
 
 import (
-	"code.squarespace.net/db/squaremeet/app"
+	"github.com/josephhammerman1979/josephhammerman.com/app"
 	"net/http"
 )
 
