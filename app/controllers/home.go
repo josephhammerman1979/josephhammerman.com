@@ -1,15 +1,11 @@
 package controllers
 
 import (
-	//"fmt"
-	//	"github.com/gorilla/mux"
 	"html/template"
 	"net/http"
-	//	"strings"
-	//"os"
 	"time"
 
-	"code.squarespace.net/db/squaremeet/app/data"
+	"github.com/josephhammerman1979/josephhammerman.com/app/data"
 )
 
 var homeTemplatePath = append([]string{templatePath + "index.gohtml"}, baseTemplatePaths...)

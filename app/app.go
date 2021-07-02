@@ -1,7 +1,7 @@
 package app
 
 import (
-	"code.squarespace.net/db/squaremeet/app/controllers"
+	"github.com/josephhammerman1979/josephhammerman.com/app/controllers"
 
 	"log"
 	"net"
