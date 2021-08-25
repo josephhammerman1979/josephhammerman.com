@@ -10,7 +10,10 @@ func Router() *mux.Router {
 	r.PathPrefix("/css/").Handler(http.FileServer(http.FS(ffs)))
 	r.PathPrefix("/js/").Handler(http.FileServer(http.FS(ffs)))
 	r.HandleFunc("/home/", Home).Methods(http.MethodGet)
-	r.HandleFunc("/", Index).Methods(http.MethodGet)
+	r.HandleFunc("/", Home).Methods(http.MethodGet)
+	r.HandleFunc("/video/{connections:connections\\/?}", VideoConnections).Methods(http.MethodGet)
+	r.HandleFunc("/{video:video\\/?}", Video).Methods(http.MethodGet, http.MethodPost)
+
 
 	// Create a file server which serves files out of the "./ui/static" directory.
 	// Note that the path given to the http.Dir function is relative to the project

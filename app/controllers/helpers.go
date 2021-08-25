@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"gocloud.dev/pubsub"
 )
 
 var (
@@ -22,7 +24,7 @@ var (
 	jsEmbedFS embed.FS
 
 	homeImage    = "homeImg.jpg"
-	imageBaseURL = "/static/"
+	imageBaseURL = "https://josephhammerman.com/static/"
 
 	templatePath      = "templates/"
 	baseTemplatePaths = []string{
@@ -68,10 +70,23 @@ type imageInfo struct {
 	ImageHeight int
 }
 
-// func decodeImageID(encodedID string) (string, error) {
-//	imageID, err := base64.URLEncoding.DecodeString(encodedID)
-//	if err != nil {
-//		return "", err
-//	}
-//	return string(imageID), nil
-// }
+func decodeImageID(encodedID string) (string, error) {
+	imageID, err := base64.URLEncoding.DecodeString(encodedID)
+	if err != nil {
+		return "", err
+	}
+	return string(imageID), nil
+}
+
+func Initialize() error {
+	const queueURL = "sqs.us-east-2.amazonaws.com/123456789012/myqueue"
+	
+	topic, err := pubsub.OpenTopic(ctx, "awssqs://"+queueURL+"?region=us-east-2")
+
+	if err != nil {
+		log.Println(err)
+		return error
+	}
+
+	defer topic.Shutdown(ctx)
+}

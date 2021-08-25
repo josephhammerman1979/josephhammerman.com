@@ -12,7 +12,7 @@ import (
 const (
 	imgStorageBaseDir      = "app/data/imgdata/"
 	imageIDDateLayout      = "20060102"
-	imageExtension         = ".png"
+	imageExtension         = ".jpg"
 	imageMetadataExtension = ".metadata"
 )
 
