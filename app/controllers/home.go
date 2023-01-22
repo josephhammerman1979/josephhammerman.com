@@ -47,5 +47,9 @@ func Home(w http.ResponseWriter, r *http.Request) {
 	}
 
 	imagePage := makeHomePage(image)
-	tmpl.Execute(w, imagePage)
+	err = tmpl.Execute(w, imagePage)
+        if err != nil {
+                internalError(err, w)
+                return
+        }
 }
