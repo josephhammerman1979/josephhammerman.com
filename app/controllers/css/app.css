@@ -27,7 +27,7 @@ img, video {
   grid-column: 1 / 4;
   justify-self: center;
   max-width: 95%;
-  height: auto;
+  height: inherit;
 }
 
 .section-div {

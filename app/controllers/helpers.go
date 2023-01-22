@@ -21,7 +21,7 @@ var (
 	//go:embed js
 	jsEmbedFS embed.FS
 
-	homeImage    = "homeImg.jpg"
+	homeImage    = "homeImg.png"
 	imageBaseURL = "/static/"
 
 	templatePath      = "templates/"

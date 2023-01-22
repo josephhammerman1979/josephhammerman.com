@@ -11,3 +11,5 @@ tags
 # vendor
 vendor/
 # dist/
+# rendered artifact
+josephhammerman.com
