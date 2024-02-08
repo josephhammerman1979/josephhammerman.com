@@ -11,6 +11,8 @@ func Router() *mux.Router {
 	r.PathPrefix("/js/").Handler(http.FileServer(http.FS(ffs)))
 	r.HandleFunc("/home/", Home).Methods(http.MethodGet)
 	r.HandleFunc("/", Index).Methods(http.MethodGet)
+        r.HandleFunc("/video", Video).Methods(http.MethodGet)
+	r.HandleFunc("/video/connections", VideoConnections).Methods(http.MethodGet)
 
 	// Create a file server which serves files out of the "./ui/static" directory.
 	// Note that the path given to the http.Dir function is relative to the project
