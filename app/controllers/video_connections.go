@@ -29,7 +29,7 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
     _, ok := peerToWSMap[topicName]
 
     if !ok {
-        log.Printf("Topic created", topicName) 
+        log.Printf("Topic created %s", topicName) 
         peerToWSMap[topicName] = map[string]interface{}{
             userID: nil,
             peerID: nil,
@@ -70,7 +70,7 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[s
                 log.Println("skipping message from self")
                 return
              }
-             _, ok := peerToWSMap[topicName][peer].([]byte) 
+             _, ok := peerToWSMap[topicName][peerID].([]byte) 
              if !ok {
                  time.Sleep(500 * time.Second)
                  log.Println("waiting for peer")
@@ -80,9 +80,10 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[s
                      log.Printf("Error writing message to %s: %s", peerID, err)
                      log.Printf("Shutting down pubSubLoop for %s...", userID)
                      break
-                 } else {
-                     log.Printf("Received message to publish")
-                 }
+                 } // else {
+                   //  log.Printf("Received message to publish")
+                   //  continue
+                 // }
             } 
         }
     }
