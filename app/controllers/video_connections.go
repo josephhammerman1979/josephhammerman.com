@@ -73,12 +73,12 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[s
          log.Printf("Received message to publish")
          _, ok := peerToWSMap[topicName][peer].([]byte) 
          if !ok {
-             time.Sleep(5)
+             time.Sleep(500)
              log.Println("waiting for peer")
              continue
          } else {
              if err := ws.Write(ctx, websocket.MessageText, peerToWSMap[topicName][peer].([]byte)); err != nil {
-                 log.Printf("Error writing message to %s: %s", userID, err)
+                 log.Printf("Error writing message to %s: %s", peerID, err)
                  break}
          }
          log.Printf("Shutting down pubSubLoop for %s...", userID)
