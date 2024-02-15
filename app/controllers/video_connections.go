@@ -73,7 +73,7 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[s
          log.Printf("Received message to publish")
          _, ok := peerToWSMap[topicName][peer].([]byte) 
          if !ok {
-             time.Sleep(500)
+             time.Sleep(500 * time.Second)
              log.Println("waiting for peer")
              continue
          } else {
