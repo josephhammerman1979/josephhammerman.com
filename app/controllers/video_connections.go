@@ -61,7 +61,7 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
     log.Printf("Shutting down wsLoop for %s...", userID)
 }
 
-func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[string]map[string]interface{}, peerID string, userID string, topicName string) {
+func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[string]map[string]interface{}, userID string, peerID string, topicName string) {
     log.Printf("Starting pubSubLoop for %s...", userID)
     
     for peer := range peerToWSMap[topicName] {
