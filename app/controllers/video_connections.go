@@ -70,7 +70,6 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[s
                 log.Println("skipping message from self")
                 return
              }
-             log.Printf("Received message to publish")
              _, ok := peerToWSMap[topicName][peer].([]byte) 
              if !ok {
                  time.Sleep(500 * time.Second)
@@ -81,8 +80,10 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[s
                      log.Printf("Error writing message to %s: %s", peerID, err)
                      log.Printf("Shutting down pubSubLoop for %s...", userID)
                      break
+                 } else {
+                     log.Printf("Received message to publish")
                  }
-            }
+            } 
         }
     }
 }
