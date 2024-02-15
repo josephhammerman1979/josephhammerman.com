@@ -8,6 +8,7 @@ import (
     "nhooyr.io/websocket"
     "sort"
     "strings"
+    "time"
 )
 
 var peerToWSMap = make(map[string]map[string]interface{})
@@ -69,8 +70,9 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[s
              return
          }
          log.Printf("Received message to publish")
-         _, ok peerToWSMap[topicName][peer].(nil) {
-             sleep(5)
+         _, ok := peerToWSMap[topicName][peer].([]byte) 
+         if !ok {
+             time.Sleep(5)
              log.Println("waiting for peer")
          } else {
              if err := ws.Write(ctx, websocket.MessageText, peerToWSMap[topicName][peer].([]byte)); err != nil {
