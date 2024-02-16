@@ -40,7 +40,7 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
 
     //cctx, cancelFunc := context.WithCancel(ctx)
 
-    go wsLoop(ctx, ws, peerToWSMap, userID, topicName)
+    wsLoop(ctx, ws, peerToWSMap, userID, topicName)
     pubSubLoop(ctx, ws, peerToWSMap, userID, peerID, topicName)
 }
 
