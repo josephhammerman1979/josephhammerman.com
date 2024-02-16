@@ -38,13 +38,13 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
 
     ctx := context.Background()
 
-    cctx, cancelFunc := context.WithCancel(ctx)
+    //cctx, cancelFunc := context.WithCancel(ctx)
 
-    go wsLoop(ctx, cancelFunc, ws, peerToWSMap, userID, topicName)
-    pubSubLoop(cctx, ctx, ws, peerToWSMap, userID, peerID, topicName)
+    go wsLoop(ctx, ws, peerToWSMap, userID, topicName)
+    pubSubLoop(ctx, ws, peerToWSMap, userID, peerID, topicName)
 }
 
-func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, peerToWSMap map[string]map[string]interface{}, userID string, topicName string) {
+func wsLoop(ctx context.Context, ws *websocket.Conn, peerToWSMap map[string]map[string]interface{}, userID string, topicName string) {
     log.Printf("Starting wsLoop for %s...", userID)
     for {
         if _, message, err := ws.Read(ctx); err != nil {
@@ -57,11 +57,11 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
                 return
         }
     }
-    cancelFunc()
+    // cancelFunc()
     log.Printf("Shutting down wsLoop for %s...", userID)
 }
 
-func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, peerToWSMap map[string]map[string]interface{}, userID string, peerID string, topicName string) {
+func pubSubLoop(ctx context.Context, ws *websocket.Conn, peerToWSMap map[string]map[string]interface{}, userID string, peerID string, topicName string) {
     log.Printf("Starting pubSubLoop for %s...", userID)
     
     for peer := range peerToWSMap[topicName] {
