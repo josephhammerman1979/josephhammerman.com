@@ -47,7 +47,7 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
 func wsLoop(ctx context.Context, ws *websocket.Conn, peerToWSMap map[string]map[string]interface{}, userID string, topicName string) {
     log.Printf("Starting wsLoop for %s...", userID)
     for {
-        if _, message, err := ws.Read(ctx); err != nil {
+        if _, message, err := ws.Reader(ctx); err != nil {
             // could check for 'close' here and tell peer we have closed
             log.Printf("Error reading message %s", err)
             break
