@@ -43,11 +43,13 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
 
     //cctx, cancelFunc := context.WithCancel(ctx)
 
-    wsLoop(ctx, ws, topicMessage, userID, topicName)
+   _, cancelFunc := context.WithCancel(ctx)
+
+    go wsLoop(ctx, cancelFunc, ws, topicMessage, userID, topicName)
     pubSubLoop(ctx, ws, topicMessage, userID, peerID, topicName)
 }
 
-func wsLoop(ctx context.Context, ws *websocket.Conn, topicMessage map[string][]rTCMessage, userID string, topicName string) {
+func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, topicMessage map[string][]rTCMessage, userID string, topicName string) {
     log.Printf("Starting wsLoop for %s...", userID)
     for {
         if _, message, err := ws.Read(ctx); err != nil {
@@ -61,11 +63,10 @@ func wsLoop(ctx context.Context, ws *websocket.Conn, topicMessage map[string][]r
                 data: message,
             }
             topicMessage[topicName] = append(topicMessage[topicName], newMessage)
-
             return
         }
     }
-    // cancelFunc()
+    cancelFunc()
     log.Printf("Shutting down wsLoop for %s...", userID)
 }
 
