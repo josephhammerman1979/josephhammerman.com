@@ -83,6 +83,9 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
                 if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
                     log.Printf("WebSocket connection closed: %s", err)
                     return
+                } else if websocket.CloseStatus(err) == websocket.StatusNoStatusRcvd {
+                    log.Printf("WebSocket connection closed: %s", err)
+                    return
                 }
                 log.Printf("Error reading message: %s", err)
                 return
