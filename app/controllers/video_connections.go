@@ -9,6 +9,7 @@ import (
     "sort"
     "strings"
     "sync"
+    "time"
 )
 
 // Simulating a local PubSub system
@@ -27,6 +28,9 @@ type TopicMessages struct {
     messages []Message
     mux      sync.Mutex
 }
+
+// Add a constant for the keep-alive interval
+const keepAliveInterval = 30 * time.Second
 
 func VideoConnections(w http.ResponseWriter, r *http.Request) {
     ws, err := websocket.Accept(w, r, nil)
@@ -51,18 +55,38 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
 
 func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, topicName string, userID string) {
     log.Printf("Starting wsLoop for %s...", userID)
+
+    defer func() {
+        cancelFunc()
+        log.Printf("Shutting down wsLoop for %s...", userID)
+    }()
+
+    keepAliveTicker := time.NewTicker(keepAliveInterval)
+    defer keepAliveTicker.Stop()
+
     for {
-        if _, message, err := ws.Read(ctx); err != nil {
-            // could check for 'close' here and tell peer we have closed
-            log.Printf("Error reading message %s", err)
-            break
-        } else {
-            log.Printf("Received message to websocket.")
-            msg := Message{
-                Data:       message,
-                Attributes: map[string]string{"sender": userID},
+        select {
+        case <-ctx.Done():
+            return
+        case <-keepAliveTicker.C:
+            // Send a keep-alive message to prevent the WebSocket connection from timing out
+            if err := ws.Write(ctx, websocket.MessageText, []byte("keep-alive")); err != nil {
+                log.Printf("Error sending keep-alive message: %s", err)
+                return
             }
-            publishToLocalTopic(topicName, msg)
+       default:
+           if _, message, err := ws.Read(ctx); err != nil {
+                // could check for 'close' here and tell peer we have closed
+                log.Printf("Error reading message %s", err)
+                break
+            } else {
+                log.Printf("Received message to websocket.")
+                msg := Message{
+                    Data:       message,
+                    Attributes: map[string]string{"sender": userID},
+                }
+                publishToLocalTopic(topicName, msg)
+            }
         }
     }
     cancelFunc()
