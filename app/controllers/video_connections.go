@@ -71,14 +71,21 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
         case <-keepAliveTicker.C:
             // Send a keep-alive message to prevent the WebSocket connection from timing out
             if err := ws.Write(ctx, websocket.MessageText, []byte("keep-alive")); err != nil {
+                if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
+                    log.Printf("WebSocket connection closed: %s", err)
+                    return
+                }
                 log.Printf("Error sending keep-alive message: %s", err)
                 return
             }
-       default:
-           if _, message, err := ws.Read(ctx); err != nil {
-                // could check for 'close' here and tell peer we have closed
-                log.Printf("Error reading message %s", err)
-                break
+        default:
+            if _, message, err := ws.Read(ctx); err != nil {
+                if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
+                    log.Printf("WebSocket connection closed: %s", err)
+                    return
+                }
+                log.Printf("Error reading message: %s", err)
+                return
             } else {
                 log.Printf("Received message to websocket.")
                 msg := Message{
@@ -89,8 +96,6 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
             }
         }
     }
-    cancelFunc()
-    log.Printf("Shutting down wsLoop for %s...", userID)
 }
 
 func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, topicName string, userID string) {
