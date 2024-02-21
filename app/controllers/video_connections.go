@@ -8,15 +8,25 @@ import (
     "nhooyr.io/websocket"
     "sort"
     "strings"
-    //"time"
+    "sync"
 )
 
-type rTCMessage struct {
-	sender    string
-        data      []byte
+// Simulating a local PubSub system
+var (
+    localPubSub sync.Map // A thread-safe map to store topics and their messages
+)
+
+// Message represents a message that can be published to a topic
+type Message struct {
+    Data       []byte
+    Attributes map[string]string
 }
 
-var topicMessage = make(map[string][]rTCMessage)
+// TopicMessages stores messages for a topic
+type TopicMessages struct {
+    messages []Message
+    mux      sync.Mutex
+}
 
 func VideoConnections(w http.ResponseWriter, r *http.Request) {
     ws, err := websocket.Accept(w, r, nil)
@@ -30,26 +40,16 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
     peers := []string{userID, peerID}
     sort.Strings(peers)
     topicName := fmt.Sprintf("video-%s-%s", peers[0], peers[1])
-
+    
     ctx := context.Background()
 
-    _, ok := topicMessage[topicName]
+    cctx, cancelFunc := context.WithCancel(ctx)
 
-    if !ok {
-        log.Printf("Creating topic %s...", topicName)
-        var messages []rTCMessage
-        topicMessage[topicName] = messages
-    }
-
-    //cctx, cancelFunc := context.WithCancel(ctx)
-
-   _, cancelFunc := context.WithCancel(ctx)
-
-    go wsLoop(ctx, cancelFunc, ws, topicMessage, userID, topicName)
-    pubSubLoop(ctx, ws, topicMessage, userID, peerID, topicName)
+    go wsLoop(ctx, cancelFunc, ws, topicName, userID)
+    pubSubLoop(cctx, ctx, ws, topicName, userID)
 }
 
-func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, topicMessage map[string][]rTCMessage, userID string, topicName string) {
+func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, topicName string, userID string) {
     log.Printf("Starting wsLoop for %s...", userID)
     for {
         if _, message, err := ws.Read(ctx); err != nil {
@@ -58,45 +58,60 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
             break
         } else {
             log.Printf("Received message to websocket.")
-            newMessage := rTCMessage{
-                sender: userID,
-                data: message,
+            msg := Message{
+                Data:       message,
+                Attributes: map[string]string{"sender": userID},
             }
-            topicMessage[topicName] = append(topicMessage[topicName], newMessage)
-            return
+            publishToLocalTopic(topicName, msg)
         }
     }
     cancelFunc()
     log.Printf("Shutting down wsLoop for %s...", userID)
 }
 
-func pubSubLoop(ctx context.Context, ws *websocket.Conn, topicMessage map[string][]rTCMessage, userID string, peerID string, topicName string) {
-    log.Printf("Starting pubSubLoop for %s, topic %s...", userID, topicName)
-
-    _, ok := topicMessage[topicName]
-
-    if !ok {
-        log.Printf("Topic not exist in map %s, erroring", topicName)
-        return
-    }    
-
+func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, topicName string, userID string) {
+    log.Printf("Starting pubSubLoop for %s...", userID)
     for {
-        for message := range topicMessage[topicName] {
-            if topicMessage[topicName][message].sender == userID {
-                log.Println("skipping message from self")
-                return
-            } else {
-                if err := ws.Write(ctx, websocket.MessageText, topicMessage[topicName][message].data); err != nil {
-                    log.Printf("Error writing message %s", err)
-                    log.Printf("Shutting down pubSubLoop for %s...", userID)
-                    break
-                } // else {
-                  //  log.Printf("Received message to publish")
-                  //  continue
-                // }
-            } 
+        select {
+        case <-cctx.Done():
+            log.Printf("Shutting down pubSubLoop for %s...", userID)
+            return
+        default:
+            messages := getMessagesFromLocalTopic(topicName)
+            for _, msg := range messages {
+                if msg.Attributes["sender"] == userID {
+                    log.Println("skipping message from self")
+                    continue
+                }
+                log.Printf("Received message to pubSub: ")
+                if err := ws.Write(ctx, websocket.MessageText, msg.Data); err != nil {
+                    log.Printf("Error writing message to %s: %s", userID, err)
+                    return
+                }
+            }
         }
     }
+}
+
+func publishToLocalTopic(topicName string, msg Message) {
+    value, _ := localPubSub.LoadOrStore(topicName, &TopicMessages{})
+    topicMessages := value.(*TopicMessages)
+    topicMessages.mux.Lock()
+    defer topicMessages.mux.Unlock()
+    topicMessages.messages = append(topicMessages.messages, msg)
+}
+
+func getMessagesFromLocalTopic(topicName string) []Message {
+    value, ok := localPubSub.Load(topicName)
+    if !ok {
+        return nil
+    }
+    topicMessages := value.(*TopicMessages)
+    topicMessages.mux.Lock()
+    defer topicMessages.mux.Unlock()
+    messages := topicMessages.messages
+    topicMessages.messages = nil // Clear messages after reading
+    return messages
 }
 
 func closeWS(ws *websocket.Conn) {
