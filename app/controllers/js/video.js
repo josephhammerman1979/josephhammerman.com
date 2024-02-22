@@ -63,3 +63,21 @@ peerConnection.oniceconnectionstatechange = (evt) => {
   console.log('ICE connection state change: ', peerConnection.iceConnectionState);
   // Add additional error handling if needed
 }
+
+const wsPromise = new Promise((resolve, reject) => {
+  if (ws.readyState === WebSocket.OPEN) {
+    resolve();
+  } else {
+    ws.onopen = () => {
+      resolve();
+    };
+  }
+});
+
+// Inside the promise chain where the send method is called
+wsPromise.then(() => {
+  // Call the send method only when the WebSocket connection is open
+  ws.send(data);
+}).catch(error => {
+  console.error('Error sending data over WebSocket: ', error);
+});
