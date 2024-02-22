@@ -36,7 +36,11 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
       peerConnection.createOffer().then(offer => {
         return peerConnection.setLocalDescription(offer);
       }).then(() => {
-        ws.send(JSON.stringify(peerConnection.localDescription));
+          wsPromise.then(() => {
+              ws.send(JSON.stringify(peerConnection.localDescription));
+          }).catch(error => {
+              console.error('Error sending data over WebSocket: ', error);
+          });
       });
     }
   });
@@ -53,7 +57,11 @@ peerConnection.ontrack = evt => {
 peerConnection.onicecandidate = evt => {
   if (evt.candidate && ws.readyState === WebSocket.OPEN) {
     console.log('ICE candidate generated: ', evt.candidate);
-    ws.send(JSON.stringify({type: 'candidate', ice: evt.candidate}));
+    wsPromise.then(() => {
+        ws.send(JSON.stringify({type: 'candidate', ice: evt.candidate}));
+    }).catch(error => {
+        console.error('Error sending data over WebSocket: ', error);
+     });
   } else {
     console.log('WebSocket connection not open or candidate is null');
   }
@@ -75,9 +83,9 @@ const wsPromise = new Promise((resolve, reject) => {
 });
 
 // Inside the promise chain where the send method is called
-wsPromise.then(() => {
+//wsPromise.then(() => {
   // Call the send method only when the WebSocket connection is open
-  ws.send(data);
-}).catch(error => {
+//  ws.send(data);
+//}).catch(error => {
   console.error('Error sending data over WebSocket: ', error);
 });
