@@ -128,7 +128,7 @@ func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, topicName string,
 }
 
 func publishToLocalTopic(topicName string, msg Message) {
-    log.Printf("Publishing to %s", topicName))
+    log.Printf("Publishing to %s", topicName)
     value, _ := localPubSub.LoadOrStore(topicName, &TopicMessages{})
     topicMessages := value.(*TopicMessages)
     topicMessages.mux.Lock()
@@ -146,9 +146,6 @@ func getMessagesFromLocalTopic(topicName string) []Message {
     topicMessages.mux.Lock()
     defer topicMessages.mux.Unlock()
     messages := topicMessages.messages
-    if len(messages) == 0 {
-        log.Printf("No messages in %s", topicName)
-    }
     topicMessages.messages = nil // Clear messages after reading
     return messages
 }
