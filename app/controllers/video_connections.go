@@ -138,10 +138,10 @@ func publishToLocalTopic(topicName string, msg Message) {
 
 func getMessagesFromLocalTopic(topicName string) []Message {
     value, ok := localPubSub.Load(topicName)
-    //if !ok {
+    if !ok {
     //    log.Printf("No topic for %s", topicName)
-    //    return nil
-    //}
+        return nil
+    }
     topicMessages := value.(*TopicMessages)
     topicMessages.mux.Lock()
     defer topicMessages.mux.Unlock()
