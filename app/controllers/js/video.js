@@ -51,9 +51,11 @@ peerConnection.ontrack = evt => {
 };
 
 peerConnection.onicecandidate = evt => {
-  if (evt.candidate) {
+  if (evt.candidate && ws.readyState === WebSocket.OPEN) {
     console.log('ICE candidate generated: ', evt.candidate);
     ws.send(JSON.stringify({type: 'candidate', ice: evt.candidate}));
+  } else {
+    console.log('WebSocket connection not open or candidate is null');
   }
 };
 
