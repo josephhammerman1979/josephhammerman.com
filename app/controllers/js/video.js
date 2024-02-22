@@ -81,11 +81,3 @@ const wsPromise = new Promise((resolve, reject) => {
     };
   }
 });
-
-// Inside the promise chain where the send method is called
-//wsPromise.then(() => {
-  // Call the send method only when the WebSocket connection is open
-//  ws.send(data);
-//}).catch(error => {
-  console.error('Error sending data over WebSocket: ', error);
-});
