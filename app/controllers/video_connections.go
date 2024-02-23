@@ -82,9 +82,11 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
             if _, message, err := ws.Read(ctx); err != nil {
                 if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
                     log.Printf("WebSocket connection closed: %s", err)
+                    removeTopicFromLocalPubSub(topicName)
                     return
                 } else if websocket.CloseStatus(err) == websocket.StatusNoStatusRcvd {
                     log.Printf("WebSocket connection closed: %s", err)
+                    removeTopicFromLocalPubSub(topicName)
                     return
                 }
                 log.Printf("Error reading message: %s", err)
@@ -153,9 +155,14 @@ func getMessagesFromLocalTopic(topicName string) []Message {
     return messages
 }
 
+func removeTopicFromLocalPubSub(topicName string) {
+    localPubSub.Delete(topicName)
+}
+
 func closeWS(ws *websocket.Conn) {
     // can check if already closed here
     if err := ws.Close(websocket.StatusNormalClosure, ""); err != nil {
         log.Printf("Error closing: %s", err)
+        removeTopicFromLocalPubSub(topicName)
     }
 }
