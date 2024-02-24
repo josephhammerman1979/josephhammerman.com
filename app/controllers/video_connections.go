@@ -161,7 +161,7 @@ func removeTopicFromLocalPubSub(topicName string) {
     localPubSub.Delete(topicName)
 }
 
-func closeWS(ws *websocket.Conn) {
+func closeWS(ws *websocket.Conn, topicName string) {
     // can check if already closed here
     if err := ws.Close(websocket.StatusNormalClosure, ""); err != nil {
         log.Printf("Error closing: %s", err)
