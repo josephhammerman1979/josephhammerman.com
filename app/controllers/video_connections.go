@@ -37,14 +37,15 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         log.Fatal(err)
     }
-    defer closeWS(ws)
+
     userID := strings.ToLower(r.URL.Query().Get("userID"))
     peerID := strings.ToLower(r.URL.Query().Get("peerID"))
 
     peers := []string{userID, peerID}
     sort.Strings(peers)
     topicName := fmt.Sprintf("video-%s-%s", peers[0], peers[1])
-    
+    defer closeWS(ws, topicName)
+
     ctx := context.Background()
 
     cctx, cancelFunc := context.WithCancel(ctx)
@@ -90,6 +91,7 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
                     return
                 }
                 log.Printf("Error reading message: %s", err)
+                removeTopicFromLocalPubSub(topicName)
                 return
             } else {
                 log.Printf("Received message to websocket.")

@@ -8,11 +8,13 @@ ws.onmessage = (evt) => {
   switch (message.type) {
     case 'offer': {
       peerConnection.setRemoteDescription(message).then(() => {
-        return peerConnection.createAnswer()
+        return peerConnection.createAnswer();
       }).then(answer => {
-        return peerConnection.setLocalDescription(answer)
+        return peerConnection.setLocalDescription(answer);
       }).then(() => {
         ws.send(JSON.stringify(peerConnection.localDescription));
+      }).catch(error => {
+        console.error('Error setting remote description or creating answer: ', error);
       });
       break;
     }
@@ -21,7 +23,13 @@ ws.onmessage = (evt) => {
       break;
     }
     case 'candidate': {
-      peerConnection.addIceCandidate(new RTCIceCandidate(message.ice));
+      if (peerConnection.remoteDescription) {
+        peerConnection.addIceCandidate(new RTCIceCandidate(message.ice)).catch(error => {
+      console.error('Error adding ICE candidate: ', error);
+    });
+    } else {
+      console.warn('Remote description is not set yet, skipping ICE candidate addition');
+    }
       break;
     }
   }
