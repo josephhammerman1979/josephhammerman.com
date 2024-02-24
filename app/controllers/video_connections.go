@@ -32,6 +32,13 @@ type TopicMessages struct {
 // Add a constant for the keep-alive interval
 const keepAliveInterval = 30 * time.Second
 
+const keepAliveMessage = {
+  type: 'keep-alive',
+  timestamp: Date.now() // Add any additional data if needed
+}
+
+const jsonKeepAliveMessage = JSON.stringify(keepAliveMessage);
+
 func VideoConnections(w http.ResponseWriter, r *http.Request) {
     ws, err := websocket.Accept(w, r, nil)
     if err != nil {
@@ -71,7 +78,7 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
             return
         case <-keepAliveTicker.C:
             // Send a keep-alive message to prevent the WebSocket connection from timing out
-            if err := ws.Write(ctx, websocket.MessageText, []byte("keep-alive")); err != nil {
+            if err := ws.Write(ctx, websocket.MessageText, []byte(jsonKeepAliveMessage)); err != nil {
                 if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
                     log.Printf("WebSocket connection closed: %s", err)
                     return
