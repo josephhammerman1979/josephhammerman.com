@@ -10,7 +10,7 @@ let peerConnection = new RTCPeerConnection({
 }),
 
 
-let ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
+const ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
 console.log('WebSocket connection established');
 
 ws.onmessage = (evt) => {
