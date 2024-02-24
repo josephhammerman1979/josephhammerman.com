@@ -7,7 +7,7 @@ let peerConnection = new RTCPeerConnection({
       username: 'webrtc@live.com'
     }
   ]
-)},
+}),
 
 
 let ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
