@@ -32,12 +32,10 @@ type TopicMessages struct {
 // Add a constant for the keep-alive interval
 const keepAliveInterval = 30 * time.Second
 
-const keepAliveMessage = {
-  type: 'keep-alive',
-  timestamp: Date.now() // Add any additional data if needed
+keepAliveMessage := map[string]interface{}{
+    "type":      "keep-alive",
+    "timestamp": time.Now().Unix(), // Add any additional data if needed
 }
-
-const jsonKeepAliveMessage = JSON.stringify(keepAliveMessage);
 
 func VideoConnections(w http.ResponseWriter, r *http.Request) {
     ws, err := websocket.Accept(w, r, nil)
@@ -70,6 +68,11 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
     }()
 
     keepAliveTicker := time.NewTicker(keepAliveInterval)
+    jsonKeepAliveMessage, err := json.Marshal(keepAliveMessage)
+    if err != nil {
+        log.Printf("Error marshaling JSON: %v", err)
+        return
+    }
     defer keepAliveTicker.Stop()
 
     for {
@@ -79,11 +82,11 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
         case <-keepAliveTicker.C:
             // Send a keep-alive message to prevent the WebSocket connection from timing out
             if err := ws.Write(ctx, websocket.MessageText, []byte(jsonKeepAliveMessage)); err != nil {
+                log.Printf("Error sending keep-alive message: %v", err)
                 if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
                     log.Printf("WebSocket connection closed: %s", err)
                     return
                 }
-                log.Printf("Error sending keep-alive message: %s", err)
                 return
             }
         default:
