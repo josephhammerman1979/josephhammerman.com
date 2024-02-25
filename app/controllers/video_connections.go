@@ -3,6 +3,7 @@ package controllers
 import (
     "context"
     "fmt"
+    "encoding/json"
     "log"
     "net/http"
     "nhooyr.io/websocket"
@@ -32,7 +33,7 @@ type TopicMessages struct {
 // Add a constant for the keep-alive interval
 const keepAliveInterval = 30 * time.Second
 
-keepAliveMessage := map[string]interface{}{
+var keepAliveMessage = map[string]interface{}{
     "type":      "keep-alive",
     "timestamp": time.Now().Unix(), // Add any additional data if needed
 }
