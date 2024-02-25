@@ -32,15 +32,26 @@ ws.onmessage = (evt) => {
       break;
     }
     case 'candidate': {
+      const iceCandidate = new RTCIceCandidate(message.ice);
       if (peerConnection.remoteDescription) {
-        peerConnection.addIceCandidate(new RTCIceCandidate(message.ice)).catch(error => {
-      console.error('Error adding ICE candidate: ', error);
-    });
-    } else {
-      console.warn('Remote description is not set yet, skipping ICE candidate addition');
-    }
+        peerConnection.addIceCandidate(iceCandidate)
+          .catch(error => console.error('Error adding ICE candidate: ', error));
+      } else {
+        console.warn('Remote description is not set yet, queueing ICE candidate');
+        if (!iceCandidatesQueue) iceCandidatesQueue = [];
+        iceCandidatesQueue.push(iceCandidate);
+      }
       break;
     }
+  }
+};
+
+// Handle queued ICE candidates once remote description is set
+peerConnection.onnegotiationneeded = () => {
+  while (iceCandidatesQueue && iceCandidatesQueue.length > 0) {
+    const iceCandidate = iceCandidatesQueue.shift();
+    peerConnection.addIceCandidate(iceCandidate)
+      .catch(error => console.error('Error adding queued ICE candidate: ', error));
   }
 };
 
