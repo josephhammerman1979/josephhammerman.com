@@ -16,17 +16,14 @@ let peerConnection = new RTCPeerConnection({
 ws.onmessage = (evt) => {
   const message = JSON.parse(evt.data);
   console.log('Message received: ', evt.data);
+
   switch (message.type) {
     case 'offer': {
-      peerConnection.setRemoteDescription(message).then(() => {
-        return peerConnection.createAnswer();
-      }).then(answer => {
-        return peerConnection.setLocalDescription(answer);
-      }).then(() => {
-        ws.send(JSON.stringify(peerConnection.localDescription));
-      }).catch(error => {
-        console.error('Error setting remote description or creating answer: ', error);
-      });
+      peerConnection.setRemoteDescription(message)
+        .then(() => peerConnection.createAnswer())
+        .then(answer => peerConnection.setLocalDescription(answer))
+        .then(() => ws.send(JSON.stringify(peerConnection.localDescription)))
+        .catch(error => console.error('Error setting remote description or creating answer: ', error));
       break;
     }
     case 'answer': {
@@ -40,8 +37,7 @@ ws.onmessage = (evt) => {
           .catch(error => console.error('Error adding ICE candidate: ', error));
       } else {
         console.warn('Remote description is not set yet, queueing ICE candidate');
-        if (!iceCandidatesQueue) iceCandidatesQueue = [];
-        iceCandidatesQueue.push(iceCandidate);
+        iceCandidatesQueue.push(iceCandidate); // Add ICE candidate to the queue
       }
       break;
     }
@@ -50,7 +46,7 @@ ws.onmessage = (evt) => {
 
 // Handle queued ICE candidates once remote description is set
 peerConnection.onnegotiationneeded = () => {
-  while (iceCandidatesQueue && iceCandidatesQueue.length > 0) {
+  while (iceCandidatesQueue.length > 0) {
     const iceCandidate = iceCandidatesQueue.shift();
     peerConnection.addIceCandidate(iceCandidate)
       .catch(error => console.error('Error adding queued ICE candidate: ', error));
@@ -95,6 +91,12 @@ peerConnection.onicecandidate = evt => {
   } else {
     console.log('WebSocket connection not open or candidate is null');
   }
+};
+
+ws.onmessage = (evt) => {
+  const message = JSON.parse(evt.data);
+  console.log('Signaling message received: ', message);
+  // Add more detailed logging as needed
 };
 
 peerConnection.oniceconnectionstatechange = (evt) => {
