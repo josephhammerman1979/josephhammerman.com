@@ -8,16 +8,8 @@ let peerConnection = new RTCPeerConnection({
         "stun:stun2.l.google.com:19302",
         "stun:stun3.l.google.com:19302",
         "stun:stun4.l.google.com:19302",
-      ],
-    },
-    {urls: [
-        "stun:global.stun.twilio.com:3478?transport=udp",
-      ],
-    },
-    {urls: [
         "stun:stun.stunprotocol.org:3478",
       ],
-    }
   ],
   iceCandidatePoolSize: 10,
 }),
