@@ -38,7 +38,7 @@ ws.onmessage = (evt) => {
       const iceCandidate = new RTCIceCandidate(message.ice);
       if (peerConnection.remoteDescription) {
         peerConnection.addIceCandidate(iceCandidate)
-        console.log('Setting remote description: ', message);
+          .then(() => console.log('Setting remote description: ', message))
           .catch(error => console.error('Error adding ICE candidate: ', error));
       } else {
         console.warn('Remote description is not set yet, queueing ICE candidate');
