@@ -38,10 +38,12 @@ ws.onmessage = (evt) => {
       const iceCandidate = new RTCIceCandidate(message.ice);
       if (peerConnection.remoteDescription) {
         peerConnection.addIceCandidate(iceCandidate)
+        console.log('Setting remote description: ', message);
           .catch(error => console.error('Error adding ICE candidate: ', error));
       } else {
         console.warn('Remote description is not set yet, queueing ICE candidate');
         iceCandidatesQueue.push(iceCandidate); // Add ICE candidate to the queue
+        console.log('ICE candidate received: ', message.ice);
       }
       break;
     }
@@ -89,6 +91,7 @@ peerConnection.onicecandidate = evt => {
     console.log('ICE candidate generated: ', evt.candidate);
     wsPromise.then(() => {
         ws.send(JSON.stringify({type: 'candidate', ice: evt.candidate}));
+        console.log('ICE candidate sent: ', evt.candidate);
     }).catch(error => {
         console.error('Error sending data over WebSocket: ', error);
      });
@@ -99,6 +102,7 @@ peerConnection.onicecandidate = evt => {
 
 ws.onmessage = (evt) => {
   const message = JSON.parse(evt.data);
+  console.log('Signaling message type: ', message.type);
   console.log('Signaling message received: ', message);
   // Add more detailed logging as needed
 };
@@ -112,8 +116,12 @@ const wsPromise = new Promise((resolve, reject) => {
   if (ws.readyState === WebSocket.OPEN) {
     resolve();
   } else {
-    ws.onopen = () => {
-      resolve();
-    };
+      ws.onopen = () => {
+        console.log('WebSocket open event');
+        resolve();
+      };
+       ws.onerror = (error) => {
+            reject(error);
+       };
   }
 });
