@@ -18,7 +18,7 @@ let peerConnection = new RTCPeerConnection({
         "stun:stun.stunprotocol.org:3478",
       ],
     }
-  ]
+  ],
   iceCandidatePoolSize: 10,
 }),
   ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
