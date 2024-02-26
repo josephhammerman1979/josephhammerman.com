@@ -10,6 +10,7 @@ let peerConnection = new RTCPeerConnection({
         "stun:stun4.l.google.com:19302",
         "stun:stun.stunprotocol.org:3478",
       ],
+    }
   ],
   iceCandidatePoolSize: 10,
 }),
