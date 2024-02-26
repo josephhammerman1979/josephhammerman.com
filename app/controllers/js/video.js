@@ -13,7 +13,7 @@ let peerConnection = new RTCPeerConnection({
     {urls: [
         "stun:global.stun.twilio.com:3478?transport=udp",
       ],
-    }
+    },
     {urls: [
         "stun:stun.stunprotocol.org:3478",
       ],
