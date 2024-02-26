@@ -19,10 +19,12 @@ let peerConnection = new RTCPeerConnection({
 
 ws.onmessage = (evt) => {
   const message = JSON.parse(evt.data);
-  console.log('Message received: ', evt.data);
+  console.log('Signaling message type: ', message.type);
+  console.log('Signaling message received: ', JSON.stringify(message));
 
   switch (message.type) {
     case 'offer': {
+      console.log('Offer received: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(message)
         .then(() => peerConnection.createAnswer())
         .then(answer => peerConnection.setLocalDescription(answer))
@@ -31,10 +33,12 @@ ws.onmessage = (evt) => {
       break;
     }
     case 'answer': {
+      console.log('Answer received: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(message);
       break;
     }
     case 'candidate': {
+      console.log('ICE candidate received: ', JSON.stringify(message.ice));
       const iceCandidate = new RTCIceCandidate(message.ice);
       if (peerConnection.remoteDescription) {
         peerConnection.addIceCandidate(iceCandidate)
@@ -88,23 +92,16 @@ peerConnection.ontrack = evt => {
 
 peerConnection.onicecandidate = evt => {
   if (evt.candidate && ws.readyState === WebSocket.OPEN) {
-    console.log('ICE candidate generated: ', evt.candidate);
+    console.log('ICE candidate generated: ', JSON.stringify(evt.candidate));
     wsPromise.then(() => {
         ws.send(JSON.stringify({type: 'candidate', ice: evt.candidate}));
-        console.log('ICE candidate sent: ', evt.candidate);
+        console.log('ICE candidate sent: ', JSON.stringify(evt.candidate));
     }).catch(error => {
         console.error('Error sending data over WebSocket: ', error);
      });
   } else {
     console.log('WebSocket connection not open or candidate is null');
   }
-};
-
-ws.onmessage = (evt) => {
-  const message = JSON.parse(evt.data);
-  console.log('Signaling message type: ', message.type);
-  console.log('Signaling message received: ', message);
-  // Add more detailed logging as needed
 };
 
 peerConnection.oniceconnectionstatechange = (evt) => {
