@@ -2,13 +2,24 @@ let iceCandidatesQueue = [];
 
 let peerConnection = new RTCPeerConnection({
   iceServers: [
-    {urls: 'stun:stun.l.google.com:19302'},
-    {
-      urls: 'turn:numb.viagenie.ca',
-      credential: 'muazkh',
-      username: 'webrtc@live.com'
+    {urls: [
+        "stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302",
+        "stun:stun2.l.google.com:19302",
+        "stun:stun3.l.google.com:19302",
+        "stun:stun4.l.google.com:19302",
+      ],
+    },
+    {urls: [
+        "stun:global.stun.twilio.com:3478?transport=udp",
+      ],
+    }
+    {urls: [
+        "stun:stun.stunprotocol.org:3478",
+      ],
     }
   ]
+  iceCandidatePoolSize: 10,
 }),
   ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
   console.log('WebSocket connection established');
