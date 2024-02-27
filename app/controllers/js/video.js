@@ -27,10 +27,14 @@ ws.onmessage = (evt) => {
       console.log('Offer received: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(message)
         .then(() => peerConnection.createAnswer())
-        .then(() => console.log('Answer created'))
-        .then(answer => peerConnection.setLocalDescription(answer))
-        .then(() => console.log('Local description set to answer'))
-        .then(() => ws.send(JSON.stringify(peerConnection.localDescription)))
+        .then(answer => {
+          console.log('Answer created');
+          return peerConnection.setLocalDescription(answer);
+         })
+        wsPromise.then(() => {
+          console.log('Local description set to answer');
+          ws.send(JSON.stringify({ type: 'answer', sdp: peerConnection.localDescription }));
+        })
         .then(() => console.log('Sent local description to peer'))
         .catch(error => console.error('Error setting remote description or creating answer: ', error));
       break;
