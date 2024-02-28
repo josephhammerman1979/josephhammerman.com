@@ -16,6 +16,7 @@ async function initializePeerConnection() {
     console.log('WebSocket connection established');
 
     setupWebSocketEventHandlers();
+    setupPeerConnectionEventHandlers();
 
   } catch (error) {
     console.error('Error initializing peer connection: ', error);
@@ -82,7 +83,16 @@ ws.onmessage = (evt) => {
 };
 }
 
-initializePeerConnection();
+function setupPeerConnectionEventHandlers() {
+
+// Handle queued ICE candidates once remote description is set
+peerConnection.onnegotiationneeded = () => {
+  while (iceCandidatesQueue.length > 0) {
+    const iceCandidate = iceCandidatesQueue.shift();
+    peerConnection.addIceCandidate(iceCandidate)
+      .catch(error => console.error('Error adding queued ICE candidate: ', error));
+  }
+};
 
 // Handle queued ICE candidates once remote description is set
 peerConnection.onnegotiationneeded = () => {
@@ -138,3 +148,6 @@ peerConnection.oniceconnectionstatechange = (evt) => {
   console.log('ICE connection state change: ', peerConnection.iceConnectionState);
   // Add additional error handling if needed
 }
+}
+
+initializePeerConnection();
