@@ -2,8 +2,6 @@ let iceCandidatesQueue = [];
 let ws;
 let peerConfiguration;
 
-var peerConfiguration = {};
-
 async function initializePeerConnection() {
   try {
     const response = await fetch("https://josephhammerman.metered.live/api/v1/turn/credentials?apiKey=9a6bf82f8a9f452e5a05748571f5dd8033c6");
