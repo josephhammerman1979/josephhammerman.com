@@ -1,14 +1,32 @@
 let iceCandidatesQueue = [];
+let ws;
 
-let peerConnection = new RTCPeerConnection({
-  iceServers: [
-    {urls: [
-        "stun:stun.l.google.com:19302",
-      ],
-    }
-  ],
-  iceCandidatePoolSize: 10,
-}),
+var peerConfiguration = {};
+
+async function initializePeerConnection() {
+  try {
+    const response = await fetch("https://josephhammerman.metered.live/api/v1/turn/credentials?apiKey=9a6bf82f8a9f452e5a05748571f5dd8033c6");
+    const iceServers = await response.json();
+    const peerConfiguration = { iceServers: iceServers };
+
+    // Now that we have the ICE servers, create the peer connection
+    var myPeerConnection = new RTCPeerConnection(peerConfiguration);
+
+    // Initialize WebSocket connection
+    ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
+    console.log('WebSocket connection established');
+
+    // Add the rest of your WebSocket and RTCPeerConnection setup code here
+    // For example, handling onmessage, ontrack, onicecandidate, etc.
+
+  } catch (error) {
+    console.error('Error initializing peer connection: ', error);
+  }
+}
+
+initializePeerConnection();
+
+var myPeerConnection = new RTCPeerConnection(peerConfiguration);
   ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
   console.log('WebSocket connection established');
 
