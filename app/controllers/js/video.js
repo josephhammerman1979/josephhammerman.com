@@ -1,6 +1,7 @@
 let iceCandidatesQueue = [];
 let ws;
 let peerConnection;
+let wsPromise;
 
 async function initializePeerConnection() {
   try {
@@ -15,6 +16,17 @@ async function initializePeerConnection() {
     ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
     console.log('WebSocket connection established');
 
+    wsPromise = new Promise((resolve, reject) => {
+      ws.onopen = () => {
+        console.log('WebSocket open event');
+        resolve();
+      };
+      ws.onerror = (error) => {
+        console.error('WebSocket error: ', error);
+        reject(error);
+      };
+    });
+
     setupWebSocketEventHandlers();
     setupPeerConnectionEventHandlers();
 
@@ -24,20 +36,6 @@ async function initializePeerConnection() {
 }
 
 function setupWebSocketEventHandlers() {
-const wsPromise = new Promise((resolve, reject) => {
-  if (ws.readyState === WebSocket.OPEN) {
-    resolve();
-  } else {
-      ws.onopen = () => {
-        console.log('WebSocket open event');
-        resolve();
-      };
-       ws.onerror = (error) => {
-            reject(error);
-       };
-  }
-})
-
 ws.onmessage = (evt) => {
   const message = JSON.parse(evt.data);
   console.log('Signaling message type: ', message.type);
