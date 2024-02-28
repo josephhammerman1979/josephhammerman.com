@@ -11,7 +11,7 @@ async function initializePeerConnection() {
     const peerConfiguration = { iceServers: iceServers };
 
     // Now that we have the ICE servers, create the peer connection
-    var peerConnection = new RTCPeerConnection(peerConfiguration);
+    peerConnection = new RTCPeerConnection(peerConfiguration);
 
     // Initialize WebSocket connection
     ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
