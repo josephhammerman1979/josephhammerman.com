@@ -82,6 +82,8 @@ ws.onmessage = (evt) => {
 };
 }
 
+initializePeerConnection();
+
 // Handle queued ICE candidates once remote description is set
 peerConnection.onnegotiationneeded = () => {
   while (iceCandidatesQueue.length > 0) {
