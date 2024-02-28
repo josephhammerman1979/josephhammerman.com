@@ -1,5 +1,6 @@
 let iceCandidatesQueue = [];
 let ws;
+let peerConfiguration;
 
 var peerConfiguration = {};
 
@@ -10,14 +11,11 @@ async function initializePeerConnection() {
     const peerConfiguration = { iceServers: iceServers };
 
     // Now that we have the ICE servers, create the peer connection
-    var myPeerConnection = new RTCPeerConnection(peerConfiguration);
+    var peerConnection = new RTCPeerConnection(peerConfiguration);
 
     // Initialize WebSocket connection
     ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
     console.log('WebSocket connection established');
-
-    // Add the rest of your WebSocket and RTCPeerConnection setup code here
-    // For example, handling onmessage, ontrack, onicecandidate, etc.
 
   } catch (error) {
     console.error('Error initializing peer connection: ', error);
@@ -25,10 +23,6 @@ async function initializePeerConnection() {
 }
 
 initializePeerConnection();
-
-var myPeerConnection = new RTCPeerConnection(peerConfiguration);
-  ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
-  console.log('WebSocket connection established');
 
 ws.onmessage = (evt) => {
   const message = JSON.parse(evt.data);
