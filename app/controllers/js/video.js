@@ -1,6 +1,6 @@
 let iceCandidatesQueue = [];
 let ws;
-let peerConfiguration;
+let peerConnection;
 
 async function initializePeerConnection() {
   try {
@@ -15,12 +15,27 @@ async function initializePeerConnection() {
     ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
     console.log('WebSocket connection established');
 
+    setupWebSocketEventHandlers();
+
   } catch (error) {
     console.error('Error initializing peer connection: ', error);
   }
 }
 
-initializePeerConnection();
+function setupWebSocketEventHandlers() {
+const wsPromise = new Promise((resolve, reject) => {
+  if (ws.readyState === WebSocket.OPEN) {
+    resolve();
+  } else {
+      ws.onopen = () => {
+        console.log('WebSocket open event');
+        resolve();
+      };
+       ws.onerror = (error) => {
+            reject(error);
+       };
+  }
+})
 
 ws.onmessage = (evt) => {
   const message = JSON.parse(evt.data);
@@ -65,6 +80,7 @@ ws.onmessage = (evt) => {
     }
   }
 };
+}
 
 // Handle queued ICE candidates once remote description is set
 peerConnection.onnegotiationneeded = () => {
@@ -120,17 +136,3 @@ peerConnection.oniceconnectionstatechange = (evt) => {
   console.log('ICE connection state change: ', peerConnection.iceConnectionState);
   // Add additional error handling if needed
 }
-
-const wsPromise = new Promise((resolve, reject) => {
-  if (ws.readyState === WebSocket.OPEN) {
-    resolve();
-  } else {
-      ws.onopen = () => {
-        console.log('WebSocket open event');
-        resolve();
-      };
-       ws.onerror = (error) => {
-            reject(error);
-       };
-  }
-});
