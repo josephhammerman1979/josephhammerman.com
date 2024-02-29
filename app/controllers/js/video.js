@@ -1,32 +1,93 @@
-let peerConnection = new RTCPeerConnection({"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]}),
-  ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + "/video/connections" + window.location.search);
+let iceCandidatesQueue = [];
+let ws;
+let peerConnection;
+let wsPromise;
 
+async function initializePeerConnection() {
+  try {
+    const response = await fetch("https://josephhammerman.metered.live/api/v1/turn/credentials?apiKey=9a6bf82f8a9f452e5a05748571f5dd8033c6");
+    const iceServers = await response.json();
+    const peerConfiguration = { iceServers: iceServers, iceCandidatePoolSize: 10 };
+
+    // Now that we have the ICE servers, create the peer connection
+    peerConnection = new RTCPeerConnection(peerConfiguration);
+
+    // Initialize WebSocket connection
+    ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
+    console.log('WebSocket connection established');
+
+    wsPromise = new Promise((resolve, reject) => {
+      ws.onopen = () => {
+        console.log('WebSocket open event');
+        resolve();
+      };
+      ws.onerror = (error) => {
+        console.error('WebSocket error: ', error);
+        reject(error);
+      };
+    });
+
+    setupWebSocketEventHandlers();
+    setupPeerConnectionEventHandlers();
+
+  } catch (error) {
+    console.error('Error initializing peer connection: ', error);
+  }
+}
+
+function setupWebSocketEventHandlers() {
 ws.onmessage = (evt) => {
   const message = JSON.parse(evt.data);
+  console.log('Signaling message type: ', message.type);
+  console.log('Signaling message received: ', JSON.stringify(message));
+
   switch (message.type) {
-  case "offer": {
-    peerConnection.setRemoteDescription(message).then(() => {
-      return peerConnection.createAnswer();
-    }).then(answer => {
-      return peerConnection.setLocalDescription(answer);
-    }).then(() => {
-      ws.send(JSON.stringify(peerConnection.localDescription));
-    });
-    break;
-  }
-  case "answer": {
-    peerConnection.setRemoteDescription(message);
-    break;
-  }
-  case "candidate": {
-    peerConnection.addIceCandidate(new RTCIceCandidate(message.ice));
-    break;
-  }
+    case 'offer': {
+      console.log('Offer received: ', JSON.stringify(message));
+      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
+        .then(() => peerConnection.createAnswer())
+        .then(answer => {
+          console.log('Answer created');
+          return peerConnection.setLocalDescription(answer);
+         })
+        wsPromise.then(() => {
+          console.log('Local description set to answer');
+          ws.send(JSON.stringify({ type: 'answer', sdp: peerConnection.localDescription }));
+          processIceCandidatesQueue()
+        })
+        .then(() => console.log('Sent local description to peer'))
+        .catch(error => console.error('Error setting remote description or creating answer: ', error));
+      break;
+    }
+    case 'answer': {
+      console.log('Answer received: ', JSON.stringify(message));
+      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
+        .then(() => processIceCandidatesQueue()) // Process the ICE candidate queue after setting remote description
+        .catch(error => console.error('Error during answer handling: ', error));
+      break;
+    }
+    case 'candidate': {
+      console.log('ICE candidate received: ', JSON.stringify(message.ice));
+      const iceCandidate = new RTCIceCandidate(message.ice);
+      if (peerConnection.remoteDescription) {
+        peerConnection.addIceCandidate(iceCandidate)
+          .then(() => console.log('Setting remote description: ', message))
+          .catch(error => console.error('Error adding ICE candidate: ', error));
+      } else {
+        console.warn('Remote description is not set yet, queueing ICE candidate');
+        iceCandidatesQueue.push(iceCandidate); // Add ICE candidate to the queue
+        console.log('ICE candidate received: ', message.ice);
+      }
+      break;
+    }
   }
 };
+}
+
+function setupPeerConnectionEventHandlers() {
 
 navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
-  let element = document.getElementById("local_video");
+  let element = document.getElementById('local_video');
   element.srcObject = stream;
   element.play().then(() => {
     stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
@@ -34,19 +95,55 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
       peerConnection.createOffer().then(offer => {
         return peerConnection.setLocalDescription(offer);
       }).then(() => {
-        ws.send(JSON.stringify(peerConnection.localDescription));
+          wsPromise.then(() => {
+              ws.send(JSON.stringify(peerConnection.localDescription));
+          }).catch(error => {
+              console.error('Error sending data over WebSocket: ', error);
+          });
+      }).then(() => {
+        // After setting the local description and possibly receiving the remote description,
+        // start processing the queued ICE candidates.
+        processIceCandidatesQueue();
       });
-    };
+    }
   });
 });
 
 peerConnection.ontrack = evt => {
-  let element = document.getElementById("remote_video");
+  console.log('Track added: ', evt.track);
+  let element = document.getElementById('remote_video');
   if (element.srcObject === evt.streams[0]) return;
   element.srcObject = evt.streams[0];
   element.play();
 };
 
 peerConnection.onicecandidate = evt => {
-  if (evt.candidate) ws.send(JSON.stringify({type: "candidate", ice: evt.candidate}));
+  if (evt.candidate && ws.readyState === WebSocket.OPEN) {
+    console.log('ICE candidate generated: ', JSON.stringify(evt.candidate));
+    wsPromise.then(() => {
+        ws.send(JSON.stringify({type: 'candidate', ice: evt.candidate}));
+        console.log('ICE candidate sent: ', JSON.stringify(evt.candidate));
+    }).catch(error => {
+        console.error('Error sending data over WebSocket: ', error);
+     });
+  } else {
+    console.log('WebSocket connection not open or candidate is null');
+  }
 };
+
+peerConnection.oniceconnectionstatechange = (evt) => {
+  console.log('ICE connection state change: ', peerConnection.iceConnectionState);
+  // Add additional error handling if needed
+}
+}
+
+// Function to process the queued ICE candidates
+function processIceCandidatesQueue() {
+  while (iceCandidatesQueue.length > 0) {
+    const iceCandidate = iceCandidatesQueue.shift();
+    peerConnection.addIceCandidate(iceCandidate)
+      .catch(error => console.error('Error adding queued ICE candidate: ', error));
+  }
+}
+
+initializePeerConnection();
