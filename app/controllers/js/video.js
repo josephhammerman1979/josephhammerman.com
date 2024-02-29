@@ -92,15 +92,6 @@ peerConnection.onnegotiationneeded = () => {
   }
 };
 
-// Handle queued ICE candidates once remote description is set
-peerConnection.onnegotiationneeded = () => {
-  while (iceCandidatesQueue.length > 0) {
-    const iceCandidate = iceCandidatesQueue.shift();
-    peerConnection.addIceCandidate(iceCandidate)
-      .catch(error => console.error('Error adding queued ICE candidate: ', error));
-  }
-};
-
 navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
   let element = document.getElementById('local_video');
   element.srcObject = stream;
@@ -115,6 +106,10 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
           }).catch(error => {
               console.error('Error sending data over WebSocket: ', error);
           });
+      }).then(() => {
+        // After setting the local description and possibly receiving the remote description,
+        // start processing the queued ICE candidates.
+        processIceCandidatesQueue();
       });
     }
   });
@@ -146,6 +141,15 @@ peerConnection.oniceconnectionstatechange = (evt) => {
   console.log('ICE connection state change: ', peerConnection.iceConnectionState);
   // Add additional error handling if needed
 }
+}
+
+// Function to process the queued ICE candidates
+function processIceCandidatesQueue() {
+  while (iceCandidatesQueue.length > 0) {
+    const iceCandidate = iceCandidatesQueue.shift();
+    peerConnection.addIceCandidate(iceCandidate)
+      .catch(error => console.error('Error adding queued ICE candidate: ', error));
+  }
 }
 
 initializePeerConnection();
