@@ -83,15 +83,6 @@ ws.onmessage = (evt) => {
 
 function setupPeerConnectionEventHandlers() {
 
-// Handle queued ICE candidates once remote description is set
-peerConnection.onnegotiationneeded = () => {
-  while (iceCandidatesQueue.length > 0) {
-    const iceCandidate = iceCandidatesQueue.shift();
-    peerConnection.addIceCandidate(iceCandidate)
-      .catch(error => console.error('Error adding queued ICE candidate: ', error));
-  }
-};
-
 navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
   let element = document.getElementById('local_video');
   element.srcObject = stream;
