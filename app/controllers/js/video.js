@@ -49,7 +49,6 @@ ws.onmessage = (evt) => {
         .then(answer => {
           console.log('Answer created');
           return peerConnection.setLocalDescription(answer);
-          .catch(error => console.error('Error setting local description', error));
          })
         wsPromise.then(() => {
           console.log('Local description set to answer');
