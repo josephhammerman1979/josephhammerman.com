@@ -1,109 +1,151 @@
-// PASTE YOUR API KEY OBTAINED FROM METERED/OPENRELAY TURN SERVER DASHBOARD AT https://dashboard.metered.ca
-var API_KEY = "9a6bf82f8a9f452e5a05748571f5dd8033c6"; 
+let iceCandidatesQueue = [];
+let ws;
+let peerConnection;
+let wsPromise;
 
+async function initializePeerConnection() {
+  try {
+    const response = await fetch("https://josephhammerman.metered.live/api/v1/turn/credentials?apiKey=9a6bf82f8a9f452e5a05748571f5dd8033c6");
+    const iceServers = await response.json();
+    const peerConfiguration = { iceServers: iceServers, iceCandidatePoolSize: 10 };
 
-var localVideo;
-var localStream;
-var remoteVideo;
-var peerConnection;
-var uuid;
-var serverConnection;
+    // Now that we have the ICE servers, create the peer connection
+    peerConnection = new RTCPeerConnection(peerConfiguration);
 
-var peerConnectionConfig = {};
+    // Initialize WebSocket connection
+    ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
+    console.log('WebSocket connection established');
 
-// Code to fetch the iceServers array
-(async () => {
-  const response = await fetch("https://josephhammerman.metered.live/api/v1/credentials?apiKey=${API_KEY}");
-  const iceServers = await response.json();
-  peerConnectionConfig.iceServers = iceServers;
-})();
+    wsPromise = new Promise((resolve, reject) => {
+      ws.onopen = () => {
+        console.log('WebSocket open event');
+        resolve();
+      };
+      ws.onerror = (error) => {
+        console.error('WebSocket error: ', error);
+        reject(error);
+      };
+    });
 
-function pageReady() {
-  uuid = createUUID();
+    setupWebSocketEventHandlers();
+    setupPeerConnectionEventHandlers();
 
-  localVideo = document.getElementById('localVideo');
-  remoteVideo = document.getElementById('remoteVideo');
-
-  serverConnection = new WebSocket('wss://' + window.location.hostname + ':8443');
-  serverConnection.onmessage = gotMessageFromServer;
-
-  var constraints = {
-    video: true,
-    audio: true,
-  };
-
-  if(navigator.mediaDevices.getUserMedia) {
-    navigator.mediaDevices.getUserMedia(constraints).then(getUserMediaSuccess).catch(errorHandler);
-  } else {
-    alert('Your browser does not support getUserMedia API');
+  } catch (error) {
+    console.error('Error initializing peer connection: ', error);
   }
 }
 
-function getUserMediaSuccess(stream) {
-  localStream = stream;
-  localVideo.srcObject = stream;
-}
+function setupWebSocketEventHandlers() {
+ws.onmessage = (evt) => {
+  const message = JSON.parse(evt.data);
+  console.log('Signaling message type: ', message.type);
+  console.log('Signaling message received: ', JSON.stringify(message));
 
-function start(isCaller) {
-  peerConnection = new RTCPeerConnection(peerConnectionConfig);
-  peerConnection.onicecandidate = gotIceCandidate;
-  peerConnection.ontrack = gotRemoteStream;
-  peerConnection.addStream(localStream);
-
-  if(isCaller) {
-    peerConnection.createOffer().then(createdDescription).catch(errorHandler);
-  }
-}
-
-function gotMessageFromServer(message) {
-  if(!peerConnection) start(false);
-
-  var signal = JSON.parse(message.data);
-
-  // Ignore messages from ourself
-  if(signal.uuid == uuid) return;
-
-  if(signal.sdp) {
-    peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp)).then(function() {
-      // Only create answers in response to offers
-      if(signal.sdp.type == 'offer') {
-        peerConnection.createAnswer().then(createdDescription).catch(errorHandler);
+  switch (message.type) {
+    case 'offer': {
+      console.log('Offer received: ', JSON.stringify(message));
+      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
+        .then(() => peerConnection.createAnswer())
+        .then(answer => {
+          console.log('Answer created');
+          return peerConnection.setLocalDescription(answer);
+         })
+        wsPromise.then(() => {
+          console.log('Local description set to answer');
+          ws.send(JSON.stringify({ type: 'answer', sdp: peerConnection.localDescription }));
+          processIceCandidatesQueue()
+        })
+        .then(() => console.log('Sent local description to peer'))
+        .catch(error => console.error('Error setting remote description or creating answer: ', error));
+      break;
+    }
+    case 'answer': {
+      console.log('Answer received: ', JSON.stringify(message));
+      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
+        .then(() => processIceCandidatesQueue()) // Process the ICE candidate queue after setting remote description
+        .catch(error => console.error('Error during answer handling: ', error));
+      break;
+    }
+    case 'candidate': {
+      console.log('ICE candidate received: ', JSON.stringify(message.ice));
+      const iceCandidate = new RTCIceCandidate(message.ice);
+      if (peerConnection.remoteDescription) {
+        peerConnection.addIceCandidate(iceCandidate)
+          .then(() => console.log('Setting remote description: ', message))
+          .catch(error => console.error('Error adding ICE candidate: ', error));
+      } else {
+        console.warn('Remote description is not set yet, queueing ICE candidate');
+        iceCandidatesQueue.push(iceCandidate); // Add ICE candidate to the queue
+        console.log('ICE candidate received: ', message.ice);
       }
-    }).catch(errorHandler);
-  } else if(signal.ice) {
-    peerConnection.addIceCandidate(new RTCIceCandidate(signal.ice)).catch(errorHandler);
+      break;
+    }
+  }
+};
+}
+
+function setupPeerConnectionEventHandlers() {
+
+navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
+  let element = document.getElementById('local_video');
+  element.srcObject = stream;
+  element.play().then(() => {
+    stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+    peerConnection.onnegotiationneeded = () => {
+      peerConnection.createOffer().then(offer => {
+        return peerConnection.setLocalDescription(offer);
+      }).then(() => {
+          wsPromise.then(() => {
+              ws.send(JSON.stringify(peerConnection.localDescription));
+          }).catch(error => {
+              console.error('Error sending data over WebSocket: ', error);
+          });
+      }).then(() => {
+        // After setting the local description and possibly receiving the remote description,
+        // start processing the queued ICE candidates.
+        processIceCandidatesQueue();
+      });
+    }
+  });
+});
+
+peerConnection.ontrack = evt => {
+  console.log('Track added: ', evt.track);
+  let element = document.getElementById('remote_video');
+  if (element.srcObject === evt.streams[0]) return;
+  element.srcObject = evt.streams[0];
+  element.play();
+};
+
+peerConnection.onicecandidate = evt => {
+  if (evt.candidate && ws.readyState === WebSocket.OPEN) {
+    console.log('ICE candidate generated: ', JSON.stringify(evt.candidate));
+    wsPromise.then(() => {
+        ws.send(JSON.stringify({type: 'candidate', ice: evt.candidate}));
+        console.log('ICE candidate sent: ', JSON.stringify(evt.candidate));
+    }).catch(error => {
+        console.error('Error sending data over WebSocket: ', error);
+     });
+  } else {
+    console.log('WebSocket connection not open or candidate is null');
+  }
+};
+
+peerConnection.oniceconnectionstatechange = (evt) => {
+  console.log('ICE connection state change: ', peerConnection.iceConnectionState);
+  // Add additional error handling if needed
+}
+}
+
+// Function to process the queued ICE candidates
+function processIceCandidatesQueue() {
+  console.log('Entered ICE candidate dequeue function');
+  while (iceCandidatesQueue.length > 0) {
+    const iceCandidate = iceCandidatesQueue.shift();
+    peerConnection.addIceCandidate(iceCandidate)
+      .then(() => console.log('Added ICE candidate', iceCandidate))
+      .catch(error => console.error('Error adding queued ICE candidate: ', error));
   }
 }
 
-function gotIceCandidate(event) {
-  if(event.candidate != null) {
-    serverConnection.send(JSON.stringify({'ice': event.candidate, 'uuid': uuid}));
-  }
-}
-
-function createdDescription(description) {
-  console.log('got description');
-
-  peerConnection.setLocalDescription(description).then(function() {
-    serverConnection.send(JSON.stringify({'sdp': peerConnection.localDescription, 'uuid': uuid}));
-  }).catch(errorHandler);
-}
-
-function gotRemoteStream(event) {
-  console.log('got remote stream');
-  remoteVideo.srcObject = event.streams[0];
-}
-
-function errorHandler(error) {
-  console.log(error);
-}
-
-// Taken from http://stackoverflow.com/a/105074/515584
-// Strictly speaking, it's not a real UUID, but it gets the job done here
-function createUUID() {
-  function s4() {
-    return Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
-  }
-
-  return s4() + s4() + '-' + s4() + '-' + s4() + '-' + s4() + '-' + s4() + s4() + s4();
-}
+initializePeerConnection();
