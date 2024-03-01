@@ -45,14 +45,15 @@ ws.onmessage = (evt) => {
     case 'offer': {
       console.log('Offer received: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(new RTCSessionDescription(message))
-        .then(() => peerConnection.createAnswer())
+        .then(() => { return peerConnection.createAnswer())})
         .then(answer => {
           console.log('Answer created');
           return peerConnection.setLocalDescription(answer);
+          .catch(error => console.error('Error setting local description', error));
          })
         wsPromise.then(() => {
           console.log('Local description set to answer');
-          ws.send(JSON.stringify({ type: 'answer', sdp: peerConnection.localDescription }));
+          ws.send(JSON.stringify(peerConnection.localDescription));
           processIceCandidatesQueue()
         })
         .then(() => console.log('Sent local description to peer'))
@@ -62,7 +63,9 @@ ws.onmessage = (evt) => {
     case 'answer': {
       console.log('Answer received: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(new RTCSessionDescription(message))
+        .then(() => console.log('Set remote description'))
         .then(() => processIceCandidatesQueue()) // Process the ICE candidate queue after setting remote description
+        .then(() => console.log('Processed candidate queue in web handlers'))
         .catch(error => console.error('Error during answer handling: ', error));
       break;
     }
@@ -71,12 +74,12 @@ ws.onmessage = (evt) => {
       const iceCandidate = new RTCIceCandidate(message.ice);
       if (peerConnection.remoteDescription) {
         peerConnection.addIceCandidate(iceCandidate)
-          .then(() => console.log('Setting remote description: ', message))
+          .then(() => console.log('Added ICE candidate', message))
           .catch(error => console.error('Error adding ICE candidate: ', error));
       } else {
         console.warn('Remote description is not set yet, queueing ICE candidate');
         iceCandidatesQueue.push(iceCandidate); // Add ICE candidate to the queue
-        console.log('ICE candidate received: ', message.ice);
+        console.log('ICE candidate enqueued: ', message.ice);
       }
       break;
     }
@@ -104,6 +107,7 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
         // After setting the local description and possibly receiving the remote description,
         // start processing the queued ICE candidates.
         processIceCandidatesQueue();
+         .then(() => console.log('Processed candidate queue from Peer handlers'))
       });
     }
   });
@@ -142,8 +146,9 @@ function processIceCandidatesQueue() {
   console.log('Entered ICE candidate dequeue function');
   while (iceCandidatesQueue.length > 0) {
     const iceCandidate = iceCandidatesQueue.shift();
+    console.log('dequeued item');
     peerConnection.addIceCandidate(iceCandidate)
-      .then(() => console.log('Added ICE candidate', iceCandidate))
+      .then(() => console.log('Added ICE candidate from within the candidate queue processing func', iceCandidate))
       .catch(error => console.error('Error adding queued ICE candidate: ', error));
   }
 }
