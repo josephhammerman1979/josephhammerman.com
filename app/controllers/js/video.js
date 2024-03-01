@@ -13,7 +13,7 @@ var peerConnectionConfig = {};
 
 // Code to fetch the iceServers array
 (async () => {
-  const response = await fetch(`https://josephhammerman.metered.live/api/v1/credentials?apiKey=${API_KEY}`);
+  const response = await fetch("https://josephhammerman.metered.live/api/v1/credentials?apiKey=${API_KEY}");
   const iceServers = await response.json();
   peerConnectionConfig.iceServers = iceServers;
 })();
