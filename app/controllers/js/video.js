@@ -106,7 +106,7 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
         // After setting the local description and possibly receiving the remote description,
         // start processing the queued ICE candidates.
         processIceCandidatesQueue();
-         .then(() => console.log('Processed candidate queue from Peer handlers'))
+        console.log('Processed candidate queue from Peer handlers'))
       });
     }
   });
