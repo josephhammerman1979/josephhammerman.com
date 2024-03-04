@@ -14,6 +14,8 @@ async function initializePeerConnection() {
     // Now that we have the ICE servers, create the peer connection
     // peerConnection = new RTCPeerConnection(peerConfiguration);
 
+    console.log('Created RTCPeerConnection with configuration: ', peerConnection.getConfiguration());
+
     // Initialize WebSocket connection
     ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
     console.log('WebSocket connection established');
@@ -39,13 +41,14 @@ async function initializePeerConnection() {
 
 function setupWebSocketEventHandlers() {
 ws.onmessage = (evt) => {
+  console.log('WebSocket message received: ', evt.data);
   const message = JSON.parse(evt.data);
   console.log('Signaling message type: ', message.type);
   console.log('Signaling message received: ', JSON.stringify(message));
 
   switch (message.type) {
     case 'offer': {
-      console.log('Offer received: ', JSON.stringify(message));
+      console.log('Setting remote description with offer: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(new RTCSessionDescription(message))
         .then(() => { return peerConnection.createAnswer()})
         .then(answer => {
@@ -62,7 +65,7 @@ ws.onmessage = (evt) => {
       break;
     }
     case 'answer': {
-      console.log('Answer received: ', JSON.stringify(message));
+      console.log('Setting remote description with answer: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(new RTCSessionDescription(message))
         .then(() => console.log('Set remote description'))
         .then(() => processIceCandidatesQueue()) // Process the ICE candidate queue after setting remote description
@@ -74,6 +77,7 @@ ws.onmessage = (evt) => {
       console.log('ICE candidate received: ', JSON.stringify(message.ice));
       const iceCandidate = new RTCIceCandidate(message.ice);
       if (peerConnection.remoteDescription) {
+        console.log('Attempting to add ICE candidate: ', JSON.stringify(message.ice));
         peerConnection.addIceCandidate(iceCandidate)
           .then(() => console.log('Added ICE candidate', message))
           .catch(error => console.error('Error adding ICE candidate: ', error));
@@ -115,6 +119,7 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
 });
 
 peerConnection.ontrack = evt => {
+  console.log('Remote track added, streams: ', evt.streams);
   console.log('Track added: ', evt.track);
   let element = document.getElementById('remote_video');
   if (element.srcObject === evt.streams[0]) return;

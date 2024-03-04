@@ -161,14 +161,15 @@ func getMessagesFromLocalTopic(topicName string) []Message {
     topicMessages.mux.Lock()
     defer topicMessages.mux.Unlock()
     messages := topicMessages.messages
-    //if len(messages) == 0 {
-    //    log.Printf("No messages in %s", topicName)
-    //}
+    if len(messages) > 0 {
+        log.Printf("Dequeued messages in %s", topicName)
+    }
     topicMessages.messages = nil // Clear messages after reading
     return messages
 }
 
 func removeTopicFromLocalPubSub(topicName string) {
+    log.Printf("Deleted topic %s", topicName)
     localPubSub.Delete(topicName)
 }
 
