@@ -156,9 +156,10 @@ function processIceCandidatesQueue() {
 
   function processQueue() {
     // Check if the queue has been populated or if the max wait time has been exceeded
-    console.log('Checking candidate queue for members');
+    //console.log('Checking candidate queue for members');
     if (iceCandidatesQueue.length > 0 || Date.now() - startTime > maxWaitTime) {
       while (iceCandidatesQueue.length > 0) {
+        console.log('ICE candidate pool populated');
         const iceCandidate = iceCandidatesQueue.shift();
         peerConnection.addIceCandidate(iceCandidate)
           .then(() => console.log('Added ICE candidate from within the candidate queue processing func', iceCandidate))
