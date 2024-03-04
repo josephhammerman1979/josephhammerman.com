@@ -151,11 +151,12 @@ peerConnection.oniceconnectionstatechange = (evt) => {
 function processIceCandidatesQueue() {
   console.log('Entered ICE candidate dequeue function');
 
-  const maxWaitTime = 500;
+  const maxWaitTime = 50000;
   const startTime = Date.now();
 
   function processQueue() {
     // Check if the queue has been populated or if the max wait time has been exceeded
+    console.log('Checking candidate queue for members');
     if (iceCandidatesQueue.length > 0 || Date.now() - startTime > maxWaitTime) {
       while (iceCandidatesQueue.length > 0) {
         const iceCandidate = iceCandidatesQueue.shift();
