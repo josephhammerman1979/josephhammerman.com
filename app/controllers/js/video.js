@@ -151,26 +151,25 @@ peerConnection.oniceconnectionstatechange = (evt) => {
 function processIceCandidatesQueue() {
   console.log('Entered ICE candidate dequeue function');
 
-  // Define the maximum wait time
-  maxWaitTime := 500 * time.Millisecond
+  const maxWaitTime = 500;
+  const startTime = Date.now();
 
-  // Record the start time
-  startTime := time.Now()
-  for {
-    if (iceCandidatesQueue.length > 0) {
-      for len(iceCandidatesQueue) > 0 {
-        iceCandidate := iceCandidatesQueue[0]
-        iceCandidatesQueue = iceCandidatesQueue[1:]
+  function processQueue() {
+    // Check if the queue has been populated or if the max wait time has been exceeded
+    if (iceCandidatesQueue.length > 0 || Date.now() - startTime > maxWaitTime) {
+      while (iceCandidatesQueue.length > 0) {
+        const iceCandidate = iceCandidatesQueue.shift();
         peerConnection.addIceCandidate(iceCandidate)
-        .then(() => console.log('Added ICE candidate from within the candidate queue processing func', iceCandidate))
-        .catch(error => console.error('Error adding queued ICE candidate: ', error));
+          .then(() => console.log('Added ICE candidate from within the candidate queue processing func', iceCandidate))
+          .catch(error => console.error('Error adding queued ICE candidate: ', error));
       }
-      break
-    } else if time.Since(startTime) > maxWaitTime {
-      // Check if the maximum wait time has been reached
-      fmt.Println("Timeout reached, exiting the loop without processing ICE candidates.")
-      break // Exit the loop if the timeout is reached
+    } else {
+      // If the queue is still empty and the max wait time has not been exceeded, check again after a delay
+      setTimeout(processQueue, 10); // Check again after 10 milliseconds
     }
+  }
+
+  processQueue(); // Start the queue processing
   }
 }
 
