@@ -170,7 +170,6 @@ function processIceCandidatesQueue() {
   }
 
   processQueue(); // Start the queue processing
-  }
 }
 
 initializePeerConnection();
