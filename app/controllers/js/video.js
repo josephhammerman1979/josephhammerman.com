@@ -21,6 +21,9 @@ async function initializePeerConnection() {
     console.log('WebSocket connection established');
 
     wsPromise = new Promise((resolve, reject) => {
+       if (ws.readyState === WebSocket.OPEN) {
+         resolve();
+      }
       ws.onopen = () => {
         console.log('WebSocket open event');
         resolve();
