@@ -53,7 +53,7 @@ ws.onmessage = (evt) => {
   switch (message.type) {
     case 'offer': {
       console.log('Setting remote description with offer: ', JSON.stringify(message));
-      peerConnection.setRemoteDescription(RTCSessionDescription(message))
+      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
         .then(() => { return peerConnection.createAnswer()})
         .then(answer => {
           console.log('Answer created');
@@ -70,7 +70,7 @@ ws.onmessage = (evt) => {
     }
     case 'answer': {
       console.log('Setting remote description with answer: ', JSON.stringify(message));
-      peerConnection.setRemoteDescription(RTCSessionDescription(message))
+      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
         .then(() => console.log('Set remote description'))
         .then(() => processIceCandidatesQueue()) // Process the ICE candidate queue after setting remote description
         .then(() => console.log('Processed candidate queue in web handlers'))
