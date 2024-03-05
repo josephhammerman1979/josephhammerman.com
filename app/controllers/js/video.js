@@ -49,8 +49,8 @@ ws.onmessage = (evt) => {
   switch (message.type) {
     case 'offer': {
       console.log('Setting remote description with offer: ', JSON.stringify(message));
-      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
-        .then(() => { return peerConnection.createAnswer()})
+      peerConnection.setRemoteDescription(RTCSessionDescription(message))
+        .then(() => { return peerConnection.createAnswer()});
         .then(answer => {
           console.log('Answer created');
           return peerConnection.setLocalDescription(answer);
@@ -66,7 +66,7 @@ ws.onmessage = (evt) => {
     }
     case 'answer': {
       console.log('Setting remote description with answer: ', JSON.stringify(message));
-      peerConnection.setRemoteDescription(new RTCSessionDescription(message))
+      peerConnection.setRemoteDescription(RTCSessionDescription(message))
         .then(() => console.log('Set remote description'))
         .then(() => processIceCandidatesQueue()) // Process the ICE candidate queue after setting remote description
         .then(() => console.log('Processed candidate queue in web handlers'))
@@ -100,6 +100,7 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
   element.play().then(() => {
     stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
     peerConnection.onnegotiationneeded = () => {
+      console.log('Negotiation needed');
       peerConnection.createOffer().then(offer => {
         return peerConnection.setLocalDescription(offer);
       }).then(() => {
@@ -112,7 +113,7 @@ navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
         // After setting the local description and possibly receiving the remote description,
         // start processing the queued ICE candidates.
         processIceCandidatesQueue()
-        console.log('Processed candidate queue from Peer handlers');
+        console.log('Processed candidate queue from onnegotiationneededr handlers');
       });
     }
   });
@@ -167,7 +168,8 @@ function processIceCandidatesQueue() {
       }
     } else {
       // If the queue is still empty and the max wait time has not been exceeded, check again after a delay
-      setTimeout(processQueue, 10); // Check again after 10 milliseconds
+      console.log('Candidate queue empty, sleeping')
+      setTimeout(processQueue, 200); // Check again after 2 seconds
     }
   }
 

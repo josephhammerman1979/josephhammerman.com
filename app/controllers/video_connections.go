@@ -57,7 +57,7 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
     cctx, cancelFunc := context.WithCancel(ctx)
 
     go wsLoop(ctx, cancelFunc, ws, topicName, userID)
-    pubSubLoop(cctx, ctx, ws, topicName, userID)
+    go pubSubLoop(cctx, ctx, ws, topicName, userID)
 }
 
 func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, topicName string, userID string) {
@@ -94,15 +94,15 @@ func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Co
             if _, message, err := ws.Read(ctx); err != nil {
                 if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
                     log.Printf("WebSocket connection closed: %s", err)
-                    removeTopicFromLocalPubSub(topicName)
+                    //removeTopicFromLocalPubSub(topicName)
                     return
                 } else if websocket.CloseStatus(err) == websocket.StatusNoStatusRcvd {
                     log.Printf("WebSocket connection closed: %s", err)
-                    removeTopicFromLocalPubSub(topicName)
+                    //removeTopicFromLocalPubSub(topicName)
                     return
                 }
                 log.Printf("Error reading message: %s", err)
-                removeTopicFromLocalPubSub(topicName)
+                //removeTopicFromLocalPubSub(topicName)
                 return
             } else {
                 log.Printf("Received message to websocket.")
@@ -177,6 +177,6 @@ func closeWS(ws *websocket.Conn, topicName string) {
     // can check if already closed here
     if err := ws.Close(websocket.StatusNormalClosure, ""); err != nil {
         log.Printf("Error closing: %s", err)
-        removeTopicFromLocalPubSub(topicName)
+        //removeTopicFromLocalPubSub(topicName)
     }
 }
