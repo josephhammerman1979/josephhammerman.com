@@ -57,7 +57,7 @@ func VideoConnections(w http.ResponseWriter, r *http.Request) {
     cctx, cancelFunc := context.WithCancel(ctx)
 
     go wsLoop(ctx, cancelFunc, ws, topicName, userID)
-    go pubSubLoop(cctx, ctx, ws, topicName, userID)
+    pubSubLoop(cctx, ctx, ws, topicName, userID)
 }
 
 func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, topicName string, userID string) {
