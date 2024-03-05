@@ -50,7 +50,7 @@ ws.onmessage = (evt) => {
     case 'offer': {
       console.log('Setting remote description with offer: ', JSON.stringify(message));
       peerConnection.setRemoteDescription(RTCSessionDescription(message))
-        .then(() => { return peerConnection.createAnswer()});
+        .then(() => { return peerConnection.createAnswer()})
         .then(answer => {
           console.log('Answer created');
           return peerConnection.setLocalDescription(answer);
