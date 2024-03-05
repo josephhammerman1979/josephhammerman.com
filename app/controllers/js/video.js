@@ -90,6 +90,15 @@ ws.onmessage = (evt) => {
     }
   }
 };
+
+ws.onclose = function(event) {
+    console.log('WebSocket closed. Attempting to reconnect...');
+    setTimeout(function() {
+        // Attempt to reconnect
+        ws = new WebSocket(ws.url);
+        // Re-apply event listeners and re-initialize as necessary
+    }, 1000); // Reconnect after 1 second
+};
 }
 
 function setupPeerConnectionEventHandlers() {
