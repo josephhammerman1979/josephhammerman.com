@@ -171,6 +171,7 @@ function processIceCandidatesQueue() {
   function processQueue() {
     // Check if the queue has been populated or if the max wait time has been exceeded
     //console.log('Checking candidate queue for members');
+    if (peerConnection.remoteDescription) {
     if (iceCandidatesQueue.length > 0 || Date.now() - startTime > maxWaitTime) {
       while (iceCandidatesQueue.length > 0) {
         console.log('ICE candidate pool populated');
@@ -184,6 +185,7 @@ function processIceCandidatesQueue() {
       console.log('Candidate queue empty, sleeping')
       setTimeout(processQueue, 200); // Check again after 2 seconds
     }
+  }
   }
 
   processQueue(); // Start the queue processing
