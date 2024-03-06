@@ -5,11 +5,11 @@ let wsPromise;
 
 async function initializePeerConnection() {
   try {
-    // const response = await fetch("https://josephhammerman.metered.live/api/v1/turn/credentials?apiKey=9a6bf82f8a9f452e5a05748571f5dd8033c6");
-    // const iceServers = await response.json();
+    const response = await fetch("https://josephhammerman.metered.live/api/v1/turn/credentials?apiKey=9a6bf82f8a9f452e5a05748571f5dd8033c6");
+    const iceServers = await response.json();
 
-    // const peerConfiguration = { iceServers: iceServers, iceCandidatePoolSize: 10 };
-    peerConnection = new RTCPeerConnection({"iceServers": [{"urls": "stun:stun.l.google.com:19302", iceCandidatePoolSize: 10 }]})
+    const peerConfiguration = { iceServers: iceServers, iceCandidatePoolSize: 10 };
+    // peerConnection = new RTCPeerConnection({"iceServers": [{"urls": "stun:stun.l.google.com:19302", iceCandidatePoolSize: 10 }]})
 
     // Now that we have the ICE servers, create the peer connection
     // peerConnection = new RTCPeerConnection(peerConfiguration);
