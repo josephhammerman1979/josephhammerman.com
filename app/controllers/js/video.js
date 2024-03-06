@@ -99,8 +99,10 @@ ws.onclose = function(event) {
     console.log('WebSocket closed. Attempting to reconnect...');
     setTimeout(function() {
         // Attempt to reconnect
-        ws = new WebSocket(ws.url);
+        ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
         // Re-apply event listeners and re-initialize as necessary
+        setupWebSocketEventHandlers();
+        setupPeerConnectionEventHandlers(); 
     }, 1000); // Reconnect after 1 second
 };
 }
