@@ -12,7 +12,7 @@ async function initializePeerConnection() {
     // peerConnection = new RTCPeerConnection({"iceServers": [{"urls": "stun:stun.l.google.com:19302", iceCandidatePoolSize: 10 }]})
 
     // Now that we have the ICE servers, create the peer connection
-    // peerConnection = new RTCPeerConnection(peerConfiguration);
+    peerConnection = new RTCPeerConnection(peerConfiguration);
 
     console.log('Created RTCPeerConnection with configuration: ', peerConnection.getConfiguration());
 
