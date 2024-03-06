@@ -11,12 +11,12 @@ async function initializePeerConnection() {
     const peerConfiguration = { iceServers: iceServers, iceCandidatePoolSize: 10 };
     // peerConnection = new RTCPeerConnection({"iceServers": [{"urls": "stun:stun.l.google.com:19302"}], iceCandidatePoolSize: 10 })
 
-    // Now that we have the ICE servers, create the peer connection
     if (peerConnection) {
-        peerConnection.getSenders().forEach(sender => sender.track.stop());
-        peerConnection.close();
-        peerConnection = null;
+      peerConnection.close();
+      peerConnection = null;
     }
+
+    // Now that we have the ICE servers, create the peer connection
     peerConnection = new RTCPeerConnection(peerConfiguration);
 
     console.log('Created RTCPeerConnection with configuration: ', peerConnection.getConfiguration());
@@ -187,7 +187,6 @@ function processIceCandidatesQueue() {
   function processQueue() {
     // Check if the queue has been populated or if the max wait time has been exceeded
     //console.log('Checking candidate queue for members');
-    if (peerConnection.remoteDescription) {
     if (iceCandidatesQueue.length > 0 || Date.now() - startTime > maxWaitTime) {
       while (iceCandidatesQueue.length > 0) {
         console.log('ICE candidate pool populated');
@@ -201,7 +200,6 @@ function processIceCandidatesQueue() {
       console.log('Candidate queue empty, sleeping')
       setTimeout(processQueue, 200); // Check again after 2 seconds
     }
-  }
   }
 
   processQueue(); // Start the queue processing
