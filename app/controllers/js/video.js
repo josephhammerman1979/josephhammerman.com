@@ -9,9 +9,14 @@ async function initializePeerConnection() {
     const iceServers = await response.json();
 
     const peerConfiguration = { iceServers: iceServers, iceCandidatePoolSize: 10 };
-    // peerConnection = new RTCPeerConnection({"iceServers": [{"urls": "stun:stun.l.google.com:19302", iceCandidatePoolSize: 10 }]})
+    // peerConnection = new RTCPeerConnection({"iceServers": [{"urls": "stun:stun.l.google.com:19302"}], iceCandidatePoolSize: 10 })
 
     // Now that we have the ICE servers, create the peer connection
+    if (peerConnection) {
+        peerConnection.getSenders().forEach(sender => sender.track.stop());
+        peerConnection.close();
+        peerConnection = null;
+    }
     peerConnection = new RTCPeerConnection(peerConfiguration);
 
     console.log('Created RTCPeerConnection with configuration: ', peerConnection.getConfiguration());
@@ -97,12 +102,21 @@ ws.onmessage = (evt) => {
 
 ws.onclose = function(event) {
     console.log('WebSocket closed. Attempting to reconnect...');
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
     setTimeout(function() {
         // Attempt to reconnect
         ws = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + '/video/connections' + window.location.search);
         // Re-apply event listeners and re-initialize as necessary
         setupWebSocketEventHandlers();
-        setupPeerConnectionEventHandlers(); 
+        
+        initializePeerConnection().then(() => {
+            console.log('RTCPeerConnection reinitialized.');
+        }).catch(error => {
+            console.error('Failed to reinitialize RTCPeerConnection: ', error);
+        });
     }, 1000); // Reconnect after 1 second
 };
 }
