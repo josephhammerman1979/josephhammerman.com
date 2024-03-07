@@ -67,9 +67,9 @@ ws.onmessage = (evt) => {
         wsPromise.then(() => {
           console.log('Local description set to answer');
           ws.send(JSON.stringify(peerConnection.localDescription));
-          processIceCandidatesQueue()
         })
         .then(() => console.log('Sent local description to peer'))
+        .then(() => processIceCandidatesQueue()) // Process the ICE candidate queue after setting remote description
         .catch(error => console.error('Error setting remote description or creating answer: ', error));
       break;
     }
@@ -202,7 +202,23 @@ function processIceCandidatesQueue() {
     }
   }
 
-  processQueue(); // Start the queue processing
+  if (peerConnection.remoteDescription) {
+    console.log('Remote description is set, starting to process ICE candidate queue.');
+    processQueue(); // Start the queue processing
+    } else {
+    console.log('Remote description not set yet, delaying ICE candidate queue processing.');
+    // Check again after a delay if the remote description has been set
+    const checkRemoteDescriptionAndProcessQueue = () => {
+      if (peerConnection.remoteDescription) {
+        console.log('Remote description now set, starting to process ICE candidate queue.');
+        processQueue();
+      } else {
+        // If still not set, check again after a delay
+        setTimeout(checkRemoteDescriptionAndProcessQueue, 200);
+      }
+    };
+    setTimeout(checkRemoteDescriptionAndProcessQueue, 200);
+  }
 }
 
 initializePeerConnection();
