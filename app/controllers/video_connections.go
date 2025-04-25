@@ -1,161 +1,168 @@
 package controllers
 
 import (
-    "context"
-    "fmt"
-    "log"
-    "net/http"
-    "nhooyr.io/websocket"
-    "sort"
-    "strings"
-    "sync"
-    "time"
+	"context"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
-// Simulating a local PubSub system
-var (
-    localPubSub sync.Map // A thread-safe map to store topics and their messages
-)
-
-// Message represents a message that can be published to a topic
-type Message struct {
-    Data       []byte
-    Attributes map[string]string
+// TopicManager structure to handle channel-based pubsub
+type TopicManager struct {
+	topics   map[string][]chan []byte
+	control  chan topicOperation
+	shutdown chan struct{}
+	mu       sync.Mutex // Mutex for thread-safe map access
 }
 
-// TopicMessages stores messages for a topic
-type TopicMessages struct {
-    messages []Message
-    mux      sync.Mutex
+type topicOperation struct {
+	opType  string // "sub", "unsub", "pub"
+	topic   string
+	ch      chan []byte
+	message []byte
 }
 
 // Add a constant for the keep-alive interval
 const keepAliveInterval = 30 * time.Second
 
-func VideoConnections(w http.ResponseWriter, r *http.Request) {
-    ws, err := websocket.Accept(w, r, nil)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer closeWS(ws)
-    userID := strings.ToLower(r.URL.Query().Get("userID"))
-    peerID := strings.ToLower(r.URL.Query().Get("peerID"))
-
-    peers := []string{userID, peerID}
-    sort.Strings(peers)
-    topicName := fmt.Sprintf("video-%s-%s", peers[0], peers[1])
-    
-    ctx := context.Background()
-
-    cctx, cancelFunc := context.WithCancel(ctx)
-
-    go wsLoop(ctx, cancelFunc, ws, topicName, userID)
-    pubSubLoop(cctx, ctx, ws, topicName, userID)
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Accepting all requests
+	},
 }
 
-func wsLoop(ctx context.Context, cancelFunc context.CancelFunc, ws *websocket.Conn, topicName string, userID string) {
-    log.Printf("Starting wsLoop for %s...", userID)
-
-    defer func() {
-        cancelFunc()
-        log.Printf("Shutting down wsLoop for %s...", userID)
-    }()
-
-    keepAliveTicker := time.NewTicker(keepAliveInterval)
-    defer keepAliveTicker.Stop()
-
-    for {
-        select {
-        case <-ctx.Done():
-            return
-        case <-keepAliveTicker.C:
-            // Send a keep-alive message to prevent the WebSocket connection from timing out
-            if err := ws.Write(ctx, websocket.MessageText, []byte("keep-alive")); err != nil {
-                if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
-                    log.Printf("WebSocket connection closed: %s", err)
-                    return
-                }
-                log.Printf("Error sending keep-alive message: %s", err)
-                return
-            }
-        default:
-            if _, message, err := ws.Read(ctx); err != nil {
-                if websocket.CloseStatus(err) == websocket.StatusAbnormalClosure {
-                    log.Printf("WebSocket connection closed: %s", err)
-                    return
-                } else if websocket.CloseStatus(err) == websocket.StatusNoStatusRcvd {
-                    log.Printf("WebSocket connection closed: %s", err)
-                    return
-                }
-                log.Printf("Error reading message: %s", err)
-                return
-            } else {
-                log.Printf("Received message to websocket.")
-                msg := Message{
-                    Data:       message,
-                    Attributes: map[string]string{"sender": userID},
-                }
-                publishToLocalTopic(topicName, msg)
-            }
-        }
-    }
-    log.Printf("Exiting reading loop for %s", userID)
+func NewTopicManager() *TopicManager {
+	tm := &TopicManager{
+		topics:   make(map[string][]chan []byte),
+		control:  make(chan topicOperation, 100), // Buffered channel for backpressure
+		shutdown: make(chan struct{}),
+	}
+	go tm.run()
+	return tm
 }
 
-func pubSubLoop(cctx, ctx context.Context, ws *websocket.Conn, topicName string, userID string) {
-    log.Printf("Starting pubSubLoop for %s...", userID)
-    for {
-        select {
-        case <-cctx.Done():
-            log.Printf("Shutting down pubSubLoop for %s...", userID)
-            return
-        default:
-            messages := getMessagesFromLocalTopic(topicName)
-            for _, msg := range messages {
-                if msg.Attributes["sender"] == userID {
-                    log.Println("skipping message from self")
-                    continue
-                }
-                log.Printf("Received message to pubSub: ")
-                if err := ws.Write(ctx, websocket.MessageText, msg.Data); err != nil {
-                    log.Printf("Error writing message to %s: %s", userID, err)
-                    return
-                }
-            }
-        }
-    }
-    log.Printf("Exiting publishing loop for %s", userID)
+func (tm *TopicManager) run() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case op := <-tm.control:
+			tm.mu.Lock()
+			switch op.opType {
+			case "sub":
+				tm.topics[op.topic] = append(tm.topics[op.topic], op.ch)
+				log.Printf("[TopicManager] Subscribed channel to topic: %s (total subscribers: %d)", op.topic, len(tm.topics[op.topic]))
+			case "unsub":
+				for i, ch := range tm.topics[op.topic] {
+					if ch == op.ch {
+						tm.topics[op.topic] = append(tm.topics[op.topic][:i], tm.topics[op.topic][i+1:]...)
+						log.Printf("[TopicManager] Unsubscribed channel from topic: %s (remaining subscribers: %d)", op.topic, len(tm.topics[op.topic]))
+						close(ch)
+						break
+					}
+				}
+			case "pub":
+				for _, ch := range tm.topics[op.topic] {
+					select {
+					case ch <- op.message:
+					default: // Avoid blocking on full channels
+						log.Printf("Channel full for topic %s", op.topic)
+					}
+				}
+			}
+			tm.mu.Unlock()
+
+		case <-ticker.C:
+			tm.mu.Lock()
+			// Cleanup empty topics
+			for topic, chans := range tm.topics {
+				if len(chans) == 0 {
+					delete(tm.topics, topic)
+				}
+			}
+			tm.mu.Unlock()
+
+		case <-tm.shutdown:
+			return
+		}
+	}
 }
 
-func publishToLocalTopic(topicName string, msg Message) {
-    log.Printf("Publishing to %s", topicName)
-    value, _ := localPubSub.LoadOrStore(topicName, &TopicMessages{})
-    topicMessages := value.(*TopicMessages)
-    topicMessages.mux.Lock()
-    defer topicMessages.mux.Unlock()
-    topicMessages.messages = append(topicMessages.messages, msg)
-}
+func VideoConnections(tm *TopicManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("WebSocket upgrade failed: %v", err)
+			return
+		}
+		defer conn.Close()
 
-func getMessagesFromLocalTopic(topicName string) []Message {
-    value, ok := localPubSub.Load(topicName)
-    if !ok {
-        //log.Printf("No topic for %s", topicName)
-        return nil
-    }
-    topicMessages := value.(*TopicMessages)
-    topicMessages.mux.Lock()
-    defer topicMessages.mux.Unlock()
-    messages := topicMessages.messages
-    //if len(messages) == 0 {
-    //    log.Printf("No messages in %s", topicName)
-    //}
-    topicMessages.messages = nil // Clear messages after reading
-    return messages
-}
+		// Get URL parameters
+		userID := r.URL.Query().Get("userID")
+		peerID := r.URL.Query().Get("peerID")
 
-func closeWS(ws *websocket.Conn) {
-    // can check if already closed here
-    if err := ws.Close(websocket.StatusNormalClosure, ""); err != nil {
-        log.Printf("Error closing: %s", err)
-    }
+		// Create context with timeout
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+		defer cancel()
+
+		// Initialize message channel
+		msgChan := make(chan []byte, 10)
+		defer close(msgChan)
+
+		// Subscribe to user's topic
+		tm.control <- topicOperation{
+			opType: "sub",
+			topic:  userID,
+			ch:     msgChan,
+		}
+		defer func() {
+			tm.control <- topicOperation{
+				opType: "unsub",
+				topic:  userID,
+				ch:     msgChan,
+			}
+		}()
+
+		// 5. Single goroutine for bidirectional communication
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg := <-msgChan:
+					if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+						log.Printf("Write error: %v", err)
+						return
+					}
+				}
+			}
+		}()
+
+		// Read loop
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				_, message, err := conn.ReadMessage()
+				if err != nil {
+					if websocket.IsUnexpectedCloseError(err) {
+						log.Printf("Unexpected close: %v", err)
+					}
+					return
+				}
+
+				// Publish to peer's topic
+				tm.control <- topicOperation{
+					opType:  "pub",
+					topic:   peerID,
+					message: message,
+				}
+			}
+		}
+	}
 }

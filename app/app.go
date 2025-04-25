@@ -10,7 +10,8 @@ import (
 
 func Run(listenAndServe func(string, http.Handler) error, port string) error {
 	log.Println("Listening on port: ", port)
-	if err := listenAndServe(net.JoinHostPort("", port), controllers.Router()); err != nil {
+	tm := controllers.NewTopicManager()
+	if err := listenAndServe(net.JoinHostPort("", port), controllers.Router(tm)); err != nil {
 		return err
 	}
 	return nil
