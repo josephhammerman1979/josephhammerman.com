@@ -1,18 +1,19 @@
 package controllers
 
 import (
-	"github.com/gorilla/mux"
 	"net/http"
+
+	"github.com/gorilla/mux"
 )
 
-func Router() *mux.Router {
+func Router(tm *TopicManager) *mux.Router {
 	r := mux.NewRouter()
 	r.PathPrefix("/css/").Handler(http.FileServer(http.FS(ffs)))
 	r.PathPrefix("/js/").Handler(http.FileServer(http.FS(ffs)))
 	r.HandleFunc("/home/", Home).Methods(http.MethodGet)
 	r.HandleFunc("/", Index).Methods(http.MethodGet)
-        r.HandleFunc("/video", Video).Methods(http.MethodGet)
-	r.HandleFunc("/video/connections", VideoConnections).Methods(http.MethodGet)
+	r.HandleFunc("/video", Video).Methods(http.MethodGet)
+	r.HandleFunc("/video/connections", VideoConnections(tm)).Methods(http.MethodGet)
 
 	// Create a file server which serves files out of the "./ui/static" directory.
 	// Note that the path given to the http.Dir function is relative to the project
