@@ -10,32 +10,30 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// TopicManager handles pubsub with message buffering and cleanup
+type channelWrapper struct {
+	ch   chan []byte
+	once sync.Once
+}
+
 type TopicManager struct {
-	topics   map[string]*topicData
+	topics   map[string][]*channelWrapper
 	control  chan topicOperation
 	shutdown chan struct{}
 	mu       sync.Mutex
 }
 
-type topicData struct {
-	subscribers []chan []byte
-	buffer      [][]byte
-	bufferSize  int
-}
-
 type topicOperation struct {
-	opType  string // "sub", "unsub", "pub"
+	opType  string
 	topic   string
 	ch      chan []byte
 	message []byte
 }
 
 const (
-	keepAliveInterval   = 30 * time.Second
-	messageBufferSize   = 100 // Increased from 10
-	topicBufferCapacity = 20  // Messages to buffer per topic with no subscribers
-	writeTimeout        = 5 * time.Second
+	keepAliveInterval    = 30 * time.Minute
+	messageBufferSize    = 100
+	controlChannelBuffer = 200
+	writeTimeout         = 5 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
@@ -44,8 +42,8 @@ var upgrader = websocket.Upgrader{
 
 func NewTopicManager() *TopicManager {
 	tm := &TopicManager{
-		topics:   make(map[string]*topicData),
-		control:  make(chan topicOperation, 200), // Larger buffer for backpressure
+		topics:   make(map[string][]*channelWrapper),
+		control:  make(chan topicOperation, controlChannelBuffer),
 		shutdown: make(chan struct{}),
 	}
 	go tm.run()
@@ -83,71 +81,48 @@ func (tm *TopicManager) processOperation(op topicOperation) {
 }
 
 func (tm *TopicManager) handleSubscribe(op topicOperation) {
-	td := tm.getOrCreateTopic(op.topic)
-
-	// Send buffered messages first
-	for _, msg := range td.buffer {
-		select {
-		case op.ch <- msg:
-		default: // Don't block on full channel
+	for _, cw := range tm.topics[op.topic] {
+		if cw.ch == op.ch {
+			return
 		}
 	}
-	td.buffer = nil
 
-	td.subscribers = append(td.subscribers, op.ch)
-	log.Printf("[TopicManager] Subscribed to %s (subscribers: %d)", op.topic, len(td.subscribers))
+	tm.topics[op.topic] = append(tm.topics[op.topic], &channelWrapper{ch: op.ch})
+	log.Printf("[TopicManager] Subscribed to %s (subscribers: %d)", op.topic, len(tm.topics[op.topic]))
 }
 
 func (tm *TopicManager) handleUnsubscribe(op topicOperation) {
-	if td, exists := tm.topics[op.topic]; exists {
-		for i, ch := range td.subscribers {
-			if ch == op.ch {
-				td.subscribers = append(td.subscribers[:i], td.subscribers[i+1:]...)
-				close(ch)
-				log.Printf("[TopicManager] Unsubscribed from %s (remaining: %d)", op.topic, len(td.subscribers))
-				return
-			}
+	subs := tm.topics[op.topic]
+	for i, cw := range subs {
+		if cw.ch == op.ch {
+			tm.topics[op.topic] = append(subs[:i], subs[i+1:]...)
+			cw.once.Do(func() {
+				close(cw.ch)
+			})
+			log.Printf("[TopicManager] Unsubscribed from %s (remaining: %d)", op.topic, len(tm.topics[op.topic]))
+			return
 		}
 	}
 }
 
 func (tm *TopicManager) handlePublish(op topicOperation) {
-	td := tm.getOrCreateTopic(op.topic)
-
-	if len(td.subscribers) == 0 {
-		// Buffer message if within capacity
-		if len(td.buffer) < td.bufferSize {
-			td.buffer = append(td.buffer, op.message)
-		}
-		return
-	}
-
-	for _, ch := range td.subscribers {
-		select {
-		case ch <- op.message:
-		case <-time.After(writeTimeout):
-			log.Printf("[TopicManager] Timeout publishing to %s", op.topic)
+	if subs, exists := tm.topics[op.topic]; exists {
+		for _, cw := range subs {
+			select {
+			case cw.ch <- op.message:
+			default:
+				log.Printf("[TopicManager] Channel full for %s", op.topic)
+			}
 		}
 	}
-}
-
-func (tm *TopicManager) getOrCreateTopic(topic string) *topicData {
-	if td, exists := tm.topics[topic]; exists {
-		return td
-	}
-	td := &topicData{
-		bufferSize: topicBufferCapacity,
-	}
-	tm.topics[topic] = td
-	return td
 }
 
 func (tm *TopicManager) cleanupTopics() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	for topic, td := range tm.topics {
-		if len(td.subscribers) == 0 && len(td.buffer) == 0 {
+	for topic, subs := range tm.topics {
+		if len(subs) == 0 {
 			delete(tm.topics, topic)
 		}
 	}
@@ -160,72 +135,62 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 			log.Printf("WebSocket upgrade failed: %v", err)
 			return
 		}
-		defer conn.Close()
 
 		userID := r.URL.Query().Get("userID")
 		peerID := r.URL.Query().Get("peerID")
-		log.Printf("[Connection] New connection - User: %s, Peer: %s", userID, peerID)
+		log.Printf("[Connection] %s connecting to %s", userID, peerID)
 
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-		defer cancel()
+		ctx, cancel := context.WithTimeout(r.Context(), keepAliveInterval)
+		defer func() {
+			conn.Close()
+			cancel()
+		}()
 
 		msgChan := make(chan []byte, messageBufferSize)
-		defer close(msgChan)
 
-		// Register connection
 		tm.control <- topicOperation{opType: "sub", topic: userID, ch: msgChan}
 		defer func() {
 			tm.control <- topicOperation{opType: "unsub", topic: userID, ch: msgChan}
 		}()
 
-		// Use separate write pump
-		writeDone := make(chan struct{})
-		go writePump(conn, msgChan, writeDone, ctx)
+		// Write pump
+		go func() {
+			defer cancel()
+			for {
+				select {
+				case msg := <-msgChan:
+					conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+					if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+						if !websocket.IsUnexpectedCloseError(err) {
+							log.Printf("[Write] Closed: %v", err)
+						}
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
 
 		// Read pump
-		readPump(conn, tm, peerID, ctx)
-
-		// Wait for writes to complete
-		<-writeDone
-	}
-}
-
-func writePump(conn *websocket.Conn, msgChan <-chan []byte, done chan<- struct{}, ctx context.Context) {
-	defer close(done)
-
-	for {
-		select {
-		case msg := <-msgChan:
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				if !websocket.IsUnexpectedCloseError(err) {
-					log.Printf("[Write] Graceful close: %v", err)
-				}
+		for {
+			select {
+			case <-ctx.Done():
 				return
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func readPump(conn *websocket.Conn, tm *TopicManager, peerID string, ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				if websocket.IsUnexpectedCloseError(err) {
-					log.Printf("[Read] Unexpected close: %v", err)
+			default:
+				_, message, err := conn.ReadMessage()
+				if err != nil {
+					if websocket.IsUnexpectedCloseError(err) {
+						log.Printf("[Read] Unexpected close: %v", err)
+					}
+					return
 				}
-				return
-			}
 
-			tm.control <- topicOperation{
-				opType:  "pub",
-				topic:   peerID,
-				message: message,
+				tm.control <- topicOperation{
+					opType:  "pub",
+					topic:   peerID,
+					message: message,
+				}
 			}
 		}
 	}
