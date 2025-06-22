@@ -4,6 +4,5 @@ go 1.16
 
 require (
 	github.com/gorilla/mux v1.8.1
-	github.com/gorilla/websocket v1.5.3 // indirect
-	nhooyr.io/websocket v1.8.10
+	github.com/gorilla/websocket v1.5.3
 )
