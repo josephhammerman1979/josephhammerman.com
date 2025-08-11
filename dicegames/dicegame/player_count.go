@@ -11,6 +11,8 @@ import (
 
 type PlayerCount struct {
 	count int
+	Done  bool
+	Value int
 }
 
 func NewPlayerCount() *PlayerCount {
@@ -25,8 +27,8 @@ func (pc *PlayerCount) Update(gm *GameManager) error {
 		pc.count--
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-		gm.pigGame = NewPigGame(pc.count)
-		gm.currentState = StatePigGame
+		pc.Done = true
+		pc.Value = pc.count
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		gm.currentState = StateLauncher
