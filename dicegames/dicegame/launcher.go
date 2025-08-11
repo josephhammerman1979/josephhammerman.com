@@ -8,6 +8,12 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/text"
 )
 
+// Add games to this list as you implement them!
+var GameMenuChoices = []string{
+	"Pig Dice Game",
+	"Mock Dice Demo", // For demonstration; assumes NewMockGame() exists.
+}
+
 type Launcher struct {
 	games       []string
 	selectedIdx int
@@ -15,7 +21,7 @@ type Launcher struct {
 
 func NewLauncher() *Launcher {
 	return &Launcher{
-		games: []string{"Pig Dice Game"},
+		games: GameMenuChoices,
 	}
 }
 
@@ -30,8 +36,13 @@ func (l *Launcher) Update(gm *GameManager) error {
 		selectedGame := l.games[l.selectedIdx]
 		switch selectedGame {
 		case "Pig Dice Game":
-			gm.playerCount = NewPlayerCount()
+			gm.selectedGame = "Pig Dice Game"
+			gm.playerCount = NewPlayerCount() // After Done, will call NewPigGame in GameManager
 			gm.currentState = StatePlayerCount
+		case "Mock Dice Demo":
+			gm.selectedGame = "Mock Dice Demo"
+			gm.activeGame = NewMockGame(5) // Launch mock game with 5 dice
+			gm.currentState = StateInGame
 		}
 	}
 	return nil
@@ -42,7 +53,7 @@ func (l *Launcher) Draw(screen *ebiten.Image) {
 	text.Draw(screen, "Select a Game", RegularFont, 50, 50, color.White)
 
 	for i, name := range l.games {
-		var clr color.Color
+		var clr color.Color = color.White
 		if i == l.selectedIdx {
 			clr = color.RGBA{0, 255, 0, 255}
 		}
