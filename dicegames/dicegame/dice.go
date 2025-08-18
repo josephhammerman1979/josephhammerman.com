@@ -17,12 +17,14 @@ type Dice struct {
 	Animating        bool // Is the die currently animating?
 	animationTick    int
 	animationFrames  int // How many frames does the animation run?
+	faceChangeRate   int
 	finalValue       int // The value to land on at end of animation
 	OffsetX, OffsetY int
 	X, Y             float64 // location in play area
 	VX, VY           float64 // velocity
 	Size             float64
 	Selected         bool // Dice is kept between rounds
+	Locked           bool // Previously kepy dice cannot usually ne rethrown
 }
 
 // NewDice creates a new Dice instance with default values.
@@ -33,7 +35,8 @@ func NewDice() *Dice {
 // StartRoll begins a dice rolling animation. "finalValue" is the value to end on.
 func (d *Dice) StartRoll() {
 	d.Animating = true
-	d.animationFrames = 40
+	d.animationFrames = 90
+	d.faceChangeRate = 3
 	d.animationTick = 0
 	d.finalValue = rand.Intn(6) + 1
 }
@@ -53,25 +56,13 @@ func (d *Dice) Update() {
 		return
 	}
 
-	updateSpeed := 1
-	switch progress := float64(d.animationTick) / float64(d.animationFrames); {
-	case progress < 0.33:
-		updateSpeed = 1 // Fast updates initially
-	case progress < 0.66:
-		updateSpeed = 2 // Slowing down
-	default:
-		updateSpeed = 3 // Final few face changes slowest
-	}
-
 	// Change face if tick aligns with speed
-	if d.animationTick%updateSpeed == 0 {
+	if d.animationTick%d.faceChangeRate == 0 {
 		d.Value = rand.Intn(6) + 1
 	}
 
 	// Apply rattling effect during animation
-	maxOffset := 10 // You can fine-tune this
-	d.OffsetX = rand.Intn(maxOffset*2+1) - maxOffset
-	d.OffsetY = rand.Intn(maxOffset*2+1) - maxOffset
+	d.OffsetX, d.OffsetY = 0, 0
 
 	// Advance animation tick
 	d.animationTick++
@@ -86,20 +77,25 @@ func (d *Dice) Update() {
 
 // Draw renders the die at (x, y) with given size.
 func (d *Dice) Draw(screen *ebiten.Image, x, y, size int) {
+	dx, dy := x, y
+	if d.Animating {
+		dx += d.OffsetX
+		dy += d.OffsetY
+	}
 	// Draw die body
-	ebitenutil.DrawRect(screen, float64(x), float64(y), float64(size), float64(size), color.White)
+	ebitenutil.DrawRect(screen, float64(dx), float64(dy), float64(size), float64(size), color.White)
 	// Black border
 	borderColor := color.RGBA{80, 80, 80, 255}
-	ebitenutil.DrawRect(screen, float64(x), float64(y), float64(size), 2, borderColor)        // Top
-	ebitenutil.DrawRect(screen, float64(x), float64(y+size-2), float64(size), 2, borderColor) // Bottom
-	ebitenutil.DrawRect(screen, float64(x), float64(y), 2, float64(size), borderColor)        // Left
-	ebitenutil.DrawRect(screen, float64(x+size-2), float64(y), 2, float64(size), borderColor) // Right
+	ebitenutil.DrawRect(screen, float64(dx), float64(dy), float64(size), 2, borderColor)        // Top
+	ebitenutil.DrawRect(screen, float64(dx), float64(dy+size-2), float64(size), 2, borderColor) // Bottom
+	ebitenutil.DrawRect(screen, float64(dx), float64(dy), 2, float64(size), borderColor)        // Left
+	ebitenutil.DrawRect(screen, float64(dx+size-2), float64(dy), 2, float64(size), borderColor) // Right
 
 	// Dot (pip) positions
 	offset := size / 4
 	r := float64(size / 10)
-	pip := func(dx, dy int) {
-		ebitenutil.DrawCircle(screen, float64(x+dx), float64(y+dy), r, color.Black)
+	pip := func(dxDot, dyDot int) {
+		ebitenutil.DrawCircle(screen, float64(dx+dxDot), float64(dy+dyDot), r, color.Black)
 	}
 	center := size / 2
 	// Standard die pip layouts
@@ -154,6 +150,7 @@ func NewDicePool(count int, cupX, cupY, playMinX, playMinY, playMaxX, playMaxY f
 		dice[i] = NewDice()
 		dice[i].Size = diceSize
 	}
+
 	return &DicePool{
 		Dice: dice,
 		CupX: cupX, CupY: cupY,
@@ -168,16 +165,25 @@ func (pool *DicePool) StartRoll() {
 	pool.Rolling = true
 	pool.Released = false
 
+	// Launch ALL dice with a similar horizontal velocity and minor random scatter
+	collectiveSpeed := 11 + rand.Float64()*2 // Base horizontal throw
+	verticalSpeedBase := -14.0               // Slight lift, mostly horizontal
+
+	angleRange := 0.25 // +/- ~15° cone of scatter
+
 	for i, d := range pool.Dice {
 		d.X = pool.CupX + float64(i)*d.Size*1.1 - (float64(len(pool.Dice)-1)/2)*d.Size*1.1
 		d.Y = pool.CupY
 
-		angle := math.Pi/4 + rand.Float64()*(math.Pi/2) // 45°–135° upward
-		speed := 5 + rand.Float64()*3
-		d.VX = math.Cos(angle) * speed
-		d.VY = -math.Sin(angle) * speed // Upwards
+		// Dice are launched together: strong rightward (+X) velocity, slight upward (-Y), mild angular scatter
+		baseAngle := 0.0 // 0 radians = due right
+		scatter := (rand.Float64() - 0.5) * angleRange
+		angle := baseAngle + scatter
+
+		d.VX = math.Cos(angle) * collectiveSpeed
+		d.VY = verticalSpeedBase + math.Sin(angle)*2.5 // minor vertical randomness
 		d.Size = pool.DiceSize
-		d.StartRoll() // Animates the die face
+		d.StartRoll()
 	}
 }
 
@@ -186,19 +192,21 @@ func (pool *DicePool) Update() {
 		return
 	}
 
+	allDone := true
 	// Move dice
 	for _, d := range pool.Dice {
 		d.Update()
 		if d.Animating {
+			allDone = false
 			d.X += d.VX
 			d.Y += d.VY
 
 			// Simple gravity
-			d.VY += 0.2
+			d.VY += 0.08
 
 			// Friction/drag
-			d.VX *= 0.98
-			d.VY *= 0.98
+			d.VX *= 0.994
+			d.VY *= 0.994
 
 			// Wall bounce
 			if d.X <= pool.PlayMinX {
@@ -235,15 +243,38 @@ func (pool *DicePool) Update() {
 		}
 	}
 
-	pool.Rolling = false
+	if allDone {
+		pool.Rolling = false
+	}
+}
+
+func drawRedOutline(screen *ebiten.Image, x, y, size int) {
+	col := color.RGBA{220, 60, 60, 255}
+	thickness := 3
+	// Top
+	ebitenutil.DrawRect(screen, float64(x-thickness), float64(y-thickness), float64(size+2*thickness), float64(thickness), col)
+	// Bottom
+	ebitenutil.DrawRect(screen, float64(x-thickness), float64(y+size), float64(size+2*thickness), float64(thickness), col)
+	// Left
+	ebitenutil.DrawRect(screen, float64(x-thickness), float64(y-thickness), float64(thickness), float64(size+2*thickness), col)
+	// Right
+	ebitenutil.DrawRect(screen, float64(x+size), float64(y-thickness), float64(thickness), float64(size+2*thickness), col)
 }
 
 func (pool *DicePool) DrawResults(screen *ebiten.Image) {
-	x := ScreenWidth/2 - pool.DiceSize*float64(len(pool.Dice))/2
-	y := 100
+	size := int(pool.DiceSize * 1.2)
+	count := len(pool.Dice)
+	startX := pool.PlayMinX + 40
+	startY := pool.PlayMinY + 110
+	endX := pool.PlayMaxX - 40
+	endY := pool.PlayMinY + pool.DiceSize*2 + 140
+
+	positions := makeDiceInRow(count, startX, startY, endX, endY, float64(size))
 	for i, d := range pool.Dice {
+		x, y := positions[i][0], positions[i][1]
+		d.Draw(screen, int(x), int(y), size)
 		if d.Selected {
-			d.Draw(screen, int(x)+i*int(pool.DiceSize*1.2), int(y), int(pool.DiceSize*1.5))
+			drawRedOutline(screen, int(x), int(y), size)
 		}
 	}
 }
@@ -277,14 +308,13 @@ func (pool *DicePool) PresentFinalResults(screen *ebiten.Image) {
 		if d.Selected {
 			// If kept, shift upward and add border
 			y -= float64(size) * 0.1
-			borderCol := color.RGBA{220, 80, 80, 255}
-			ebitenutil.DrawRect(screen, x-4, y-4, float64(size)+8, float64(size)+8, borderCol)
-		} else {
-			// Optionally dim or gray out the not-kept dice if desired
-			// (Or just draw as normal)
+			// borderCol := color.RGBA{220, 80, 80, 255}
+			//ebitenutil.DrawRect(screen, x-4, y-4, float64(size)+8, float64(size)+8, borderCol)
 		}
-
 		d.Draw(screen, int(x), int(y), size)
+		if d.Selected {
+			drawRedOutline(screen, int(x), int(y), size)
+		}
 	}
 
 	resultY := int(endY + pool.DiceSize*1.3)
@@ -364,7 +394,7 @@ func makeDiceInRow(
 }
 
 func (pool *DicePool) ToggleKeep(idx int) {
-	if idx < 0 || idx >= len(pool.Dice) {
+	if idx < 0 || idx >= len(pool.Dice) || pool.Dice[idx].Locked {
 		return
 	}
 	pool.Dice[idx].Selected = !pool.Dice[idx].Selected
@@ -381,6 +411,12 @@ func (pool *DicePool) RerollUnkeptFromCup() {
 		}
 	}
 	pool.Rolling = true
+	for _, d := range pool.Dice {
+		if d.Selected {
+			d.Locked = true
+		}
+	}
+
 }
 
 func (pool *DicePool) ResetAll() {

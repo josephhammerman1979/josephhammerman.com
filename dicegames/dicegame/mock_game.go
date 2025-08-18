@@ -2,7 +2,6 @@ package game
 
 import (
 	"image/color"
-	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -19,8 +18,11 @@ type MockGame struct {
 
 func NewMockGame(diceCount int) *MockGame {
 	// Cup in bottom middle of play area
-	cupX := float64(ScorePanelWidth) + (float64(ScreenWidth-ScorePanelWidth) / 2)
-	cupY := float64(ScreenHeight) - 60
+	//cupX := float64(ScorePanelWidth) + (float64(ScreenWidth-ScorePanelWidth) / 2)
+	///cupY := float64(ScreenHeight) - 60
+
+	cupX := float64(ScorePanelWidth) + 40 // Left edge (with some margin)
+	cupY := float64(ScreenHeight) - 60    // Still near bottom
 
 	pool := NewDicePool(
 		diceCount,
@@ -53,9 +55,19 @@ func (g *MockGame) Update() error {
 		}
 	case "results":
 		mx, my := ebiten.CursorPosition()
+		// Get displayed positions of all dice (same as in PresentFinalResults)
+		positions := makeDiceInRow(
+			len(g.Pool.Dice),
+			g.Pool.PlayMinX, g.Pool.PlayMinY+40,
+			g.Pool.PlayMaxX, g.Pool.PlayMinY+g.Pool.DiceSize*2+40,
+			g.Pool.DiceSize*1.2,
+		)
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-			for i, d := range g.Pool.Dice {
-				if mx >= int(d.X) && mx <= int(d.X+d.Size) && my >= int(d.Y) && my <= int(d.Y+d.Size) {
+			for i := range g.Pool.Dice {
+				x, y := positions[i][0], positions[i][1]
+				size := int(g.Pool.DiceSize * 1.2)
+				// Don't shift y for selected dice in hit-test—just use actual drawn position from PresentFinalResults!
+				if mx >= int(x) && mx <= int(x)+size && my >= int(y) && my <= int(y)+size {
 					g.Pool.ToggleKeep(i)
 				}
 			}
@@ -81,23 +93,17 @@ func (g *MockGame) Draw(screen *ebiten.Image) {
 		float64(ScreenWidth-ScorePanelWidth), float64(ScreenHeight),
 		color.RGBA{20, 20, 40, 255})
 
-	for i, d := range g.Pool.Dice {
-		y := d.Y
-		if g.GameState == "results" && d.Selected {
-			y = 70
+	if g.GameState == "rolling" {
+		// Draw dice at their live animated positions (throw/bounce phase)
+		for _, d := range g.Pool.Dice {
+			d.Draw(screen, int(d.X), int(d.Y), int(d.Size))
+			if d.Selected {
+				drawRedOutline(screen, int(d.X), int(d.Y), int(d.Size))
+			}
 		}
-		d.Draw(screen, int(d.X), int(y), int(d.Size))
-
-		var col color.Color = color.White
-		if d.Selected {
-			col = color.RGBA{220, 60, 60, 255}
-			ebitenutil.DrawRect(screen, d.X-3, y-3, d.Size+6, d.Size+6, col)
-		}
-		numStr := strconv.Itoa(d.Value)
-		text.Draw(screen, numStr, RegularFont, int(d.X+d.Size*0.4), int(y+d.Size+22), col)
-		if g.DiceCount > 6 {
-			text.Draw(screen, strconv.Itoa(i+1), RegularFont, int(d.X+d.Size/3), int(y)-9, color.White)
-		}
+	} else {
+		// Now present results in a neat row (results/nongameplay phase)
+		g.Pool.PresentFinalResults(screen)
 	}
 
 	text.Draw(screen, g.Message, RegularFont, ScorePanelWidth+20, 30, color.White)
