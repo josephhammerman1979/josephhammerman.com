@@ -2,11 +2,14 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
 
@@ -16,7 +19,10 @@ type channelWrapper struct {
 }
 
 type TopicManager struct {
-	topics   map[string][]*channelWrapper
+	topics map[string][]*channelWrapper
+	// roomID -> set of userIDs
+	rooms map[string]map[string]struct{}
+
 	control  chan topicOperation
 	shutdown chan struct{}
 	mu       sync.Mutex
@@ -34,6 +40,7 @@ const (
 	messageBufferSize    = 100
 	controlChannelBuffer = 200
 	writeTimeout         = 5 * time.Second
+	maxRoomParticipants  = 10
 )
 
 var upgrader = websocket.Upgrader{
@@ -43,9 +50,11 @@ var upgrader = websocket.Upgrader{
 func NewTopicManager() *TopicManager {
 	tm := &TopicManager{
 		topics:   make(map[string][]*channelWrapper),
+		rooms:    make(map[string]map[string]struct{}),
 		control:  make(chan topicOperation, controlChannelBuffer),
 		shutdown: make(chan struct{}),
 	}
+
 	go tm.run()
 	return tm
 }
@@ -86,7 +95,6 @@ func (tm *TopicManager) handleSubscribe(op topicOperation) {
 			return
 		}
 	}
-
 	tm.topics[op.topic] = append(tm.topics[op.topic], &channelWrapper{ch: op.ch})
 	log.Printf("[TopicManager] Subscribed to %s (subscribers: %d)", op.topic, len(tm.topics[op.topic]))
 }
@@ -100,8 +108,11 @@ func (tm *TopicManager) handleUnsubscribe(op topicOperation) {
 				close(cw.ch)
 			})
 			log.Printf("[TopicManager] Unsubscribed from %s (remaining: %d)", op.topic, len(tm.topics[op.topic]))
-			return
+			break
 		}
+	}
+	if len(tm.topics[op.topic]) == 0 {
+		delete(tm.topics, op.topic)
 	}
 }
 
@@ -126,19 +137,82 @@ func (tm *TopicManager) cleanupTopics() {
 			delete(tm.topics, topic)
 		}
 	}
+	// rooms map is kept small by VideoConnections removing members on disconnect
+}
+
+// helpers for room membership
+
+var idRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]{6,32}$`)
+
+func validID(id string) bool {
+	return idRegexp.MatchString(id)
+}
+
+func (tm *TopicManager) addRoomMember(roomID, userID string) (ok bool, count int) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	members, exists := tm.rooms[roomID]
+	if !exists {
+		members = make(map[string]struct{})
+		tm.rooms[roomID] = members
+	}
+	if len(members) >= maxRoomParticipants {
+		return false, len(members)
+	}
+	members[userID] = struct{}{}
+	return true, len(members)
+}
+
+func (tm *TopicManager) removeRoomMember(roomID, userID string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if members, exists := tm.rooms[roomID]; exists {
+		delete(members, userID)
+		if len(members) == 0 {
+			delete(tm.rooms, roomID)
+		}
+	}
+}
+
+// signaling message format (for next JS step)
+
+type signalMessage struct {
+	Type   string          `json:"type"`   // "offer","answer","candidate", etc.
+	From   string          `json:"from"`   // sender userID
+	To     string          `json:"to"`     // target userID
+	RoomID string          `json:"roomID"` // room scope
+	SDP    json.RawMessage `json:"sdp,omitempty"`
+	ICE    json.RawMessage `json:"ice,omitempty"`
+	// keep RawMessage so we just relay; client parses SDP/ICE
 }
 
 func VideoConnections(tm *TopicManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		roomID := vars["roomID"]
+		userID := r.URL.Query().Get("userID")
+
+		if !validID(roomID) || !validID(userID) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		if ok, count := tm.addRoomMember(roomID, userID); !ok {
+			log.Printf("[Connection] room %s full (%d users)", roomID, count)
+			http.Error(w, "room full", http.StatusConflict)
+			return
+		}
+		defer tm.removeRoomMember(roomID, userID)
+
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("WebSocket upgrade failed: %v", err)
 			return
 		}
 
-		userID := r.URL.Query().Get("userID")
-		peerID := r.URL.Query().Get("peerID")
-		log.Printf("[Connection] %s connecting to %s", userID, peerID)
+		log.Printf("[Connection] %s joined room %s", userID, roomID)
 
 		ctx, cancel := context.WithTimeout(r.Context(), keepAliveInterval)
 		defer func() {
@@ -147,10 +221,11 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 		}()
 
 		msgChan := make(chan []byte, messageBufferSize)
+		topicSelf := roomID + ":" + userID
 
-		tm.control <- topicOperation{opType: "sub", topic: userID, ch: msgChan}
+		tm.control <- topicOperation{opType: "sub", topic: topicSelf, ch: msgChan}
 		defer func() {
-			tm.control <- topicOperation{opType: "unsub", topic: userID, ch: msgChan}
+			tm.control <- topicOperation{opType: "unsub", topic: topicSelf, ch: msgChan}
 		}()
 
 		// Write pump
@@ -186,9 +261,22 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 					return
 				}
 
+				var sig signalMessage
+				if err := json.Unmarshal(message, &sig); err != nil {
+					log.Printf("[Read] invalid JSON: %v", err)
+					continue
+				}
+
+				// Basic validation: enforce room + IDs, ignore bad messages
+				if sig.RoomID != roomID || !validID(sig.To) || !validID(sig.From) {
+					continue
+				}
+
+				// Forward to specific peer in same room
+				targetTopic := roomID + ":" + sig.To
 				tm.control <- topicOperation{
 					opType:  "pub",
-					topic:   peerID,
+					topic:   targetTopic,
 					message: message,
 				}
 			}

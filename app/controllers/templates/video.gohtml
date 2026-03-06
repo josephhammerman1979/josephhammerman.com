@@ -1,7 +1,20 @@
 {{ template "base" . }}
 {{ define "head" }}{{ end }}
 {{ define "main" }}
-<video id="local_video" autoplay controls muted playsinline style="width: 650px; margin-bottom: 50px;"></video>
-<video id="remote_video" autoplay controls playsinline style="width: 650px; margin-bottom: 50px;"></video>
+<div id="video-root" data-room-id="{{ .RoomID }}">
+  <video id="local_video"
+         autoplay
+         controls
+         muted
+         playsinline
+         style="width: 650px; margin-bottom: 20px;"></video>
+
+  <div id="remote_container"
+       style="display: flex; flex-wrap: wrap; gap: 20px;">
+    <!-- remote <video> elements are created dynamically by video.js -->
+  </div>
+</div>
+
 <script type="text/javascript" src="/js/video.js"></script>
 {{ end }}
+
