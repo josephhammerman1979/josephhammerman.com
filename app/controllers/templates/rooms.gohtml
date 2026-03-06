@@ -1,0 +1,15 @@
+{{ template "base" . }}
+{{ define "head" }}{{ end }}
+{{ define "main" }}
+<h1>Create or Join a Room</h1>
+
+<form action="/rooms" method="post" style="margin-bottom: 1rem;">
+  <button type="submit">Create New Room</button>
+</form>
+
+<form action="/rooms/{{.RoomID}}" method="get">
+  <label for="room-id">Join room by code:</label>
+  <input id="room-id" name="code" pattern="[A-Za-z0-9_-]{6,32}" required />
+  <button type="submit">Join</button>
+</form>
+{{ end }}
