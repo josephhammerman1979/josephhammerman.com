@@ -142,7 +142,7 @@ func (tm *TopicManager) cleanupTopics() {
 
 // helpers for room membership
 
-var idRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]{6,32}$`)
+var idRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]{6,64}$`)
 
 func validID(id string) bool {
 	return idRegexp.MatchString(id)
@@ -176,7 +176,30 @@ func (tm *TopicManager) removeRoomMember(roomID, userID string) {
 	}
 }
 
-// signaling message format (for next JS step)
+// getRoomMembers returns all member IDs in a room excluding the given userID.
+func (tm *TopicManager) getRoomMembers(roomID, excludeID string) []string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	members := tm.rooms[roomID]
+	result := make([]string, 0, len(members))
+	for id := range members {
+		if id != excludeID {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+// peersMessage is sent by the server to a newly-joined user to tell them
+// which peers are already in the room so they can initiate offers.
+type peersMessage struct {
+	Type   string   `json:"type"`
+	RoomID string   `json:"roomID"`
+	Peers  []string `json:"peers"`
+}
+
+// signaling message format
 
 type signalMessage struct {
 	Type   string          `json:"type"`   // "offer","answer","candidate", etc.
@@ -227,6 +250,13 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 		defer func() {
 			tm.control <- topicOperation{opType: "unsub", topic: topicSelf, ch: msgChan}
 		}()
+
+		// Tell the new user about peers already in the room so they can initiate offers.
+		if existing := tm.getRoomMembers(roomID, userID); len(existing) > 0 {
+			if data, err := json.Marshal(peersMessage{Type: "peers", RoomID: roomID, Peers: existing}); err == nil {
+				msgChan <- data
+			}
+		}
 
 		// Write pump
 		go func() {
