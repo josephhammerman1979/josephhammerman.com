@@ -2,8 +2,15 @@
 
 const videoRoot = document.getElementById("video-root");
 const roomID = videoRoot.dataset.roomId;
-const myID = crypto.randomUUID();
+
+function randomID() {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+const myID = randomID();
 const peers = Object.create(null);
+const pendingPeers = new Set();
 const wsScheme = window.location.protocol === "https:" ? "wss://" : "ws://";
 const ws = new WebSocket(
   wsScheme + window.location.host + "/rooms/" + encodeURIComponent(roomID) + "/ws?userID=" + encodeURIComponent(myID)
@@ -34,7 +41,23 @@ ws.onopen = () => {
 
 ws.onmessage = (evt) => {
   const msg = JSON.parse(evt.data);
-  if (!msg || msg.roomID !== roomID || msg.to !== myID) return;
+  if (!msg || msg.roomID !== roomID) return;
+
+  // Server-initiated notification of existing room members.
+  if (msg.type === "peers") {
+    msg.peers.forEach((peerID) => {
+      if (peerID === myID || peers[peerID]) return;
+      if (localStream) {
+        const pc = createPeerConnection(peerID);
+        peers[peerID] = pc;
+      } else {
+        pendingPeers.add(peerID);
+      }
+    });
+    return;
+  }
+
+  if (msg.to !== myID) return;
   const from = msg.from;
   if (!from || from === myID) return;
 
@@ -46,7 +69,7 @@ ws.onmessage = (evt) => {
 
   switch (msg.type) {
     case "offer":
-      pc.setRemoteDescription(new RTCSessionDescription(msg))
+      pc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: msg.sdp }))
         .then(() => pc.createAnswer())
         .then((answer) => pc.setLocalDescription(answer))
         .then(() => {
@@ -55,13 +78,13 @@ ws.onmessage = (evt) => {
         .catch((err) => console.error("Error handling offer", err));
       break;
     case "answer":
-      pc.setRemoteDescription(new RTCSessionDescription(msg))
+      pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: msg.sdp }))
         .catch((err) => console.error("Error setting remote answer", err));
       break;
     case "candidate":
       if (msg.ice) {
         pc.addIceCandidate(new RTCIceCandidate(msg.ice))
-          .catch((err) => console.error("Error adding ICE", err));
+          .catch((err) => console.error("Error adding ICE candidate", err));
       }
       break;
   }
@@ -146,6 +169,13 @@ navigator.mediaDevices
     const localVideo = document.getElementById("local_video");
     localVideo.srcObject = stream;
     updateLayout();
+    // Connect to any peers that arrived before the local stream was ready.
+    pendingPeers.forEach((peerID) => {
+      if (!peers[peerID]) {
+        peers[peerID] = createPeerConnection(peerID);
+      }
+    });
+    pendingPeers.clear();
     return localVideo.play();
   })
   .catch((err) => console.error("Error getting user media", err));
