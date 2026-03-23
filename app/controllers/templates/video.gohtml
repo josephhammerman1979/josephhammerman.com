@@ -1,7 +1,46 @@
 {{ template "base" . }}
-{{ define "head" }}{{ end }}
+{{ define "head" }}<style>
+#video-room-header {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+#video-root {
+  grid-column: 1 / 4;
+  padding: 0 1rem;
+  box-sizing: border-box;
+}
+
+#video-grid {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  grid-template-columns: 1fr;
+}
+
+#video-grid video {
+  grid-column: unset;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #000;
+}
+</style>{{ end }}
 {{ define "main" }}
-<video id="local_video" autoplay controls muted playsinline style="width: 650px; margin-bottom: 50px;"></video>
-<video id="remote_video" autoplay controls playsinline style="width: 650px; margin-bottom: 50px;"></video>
+<div id="video-room-header">
+  <span>Room: <code>{{ .RoomID }}</code></span>
+  <button id="copy-link-btn">Copy Invite Link</button>
+</div>
+<div id="video-root" data-room-id="{{ .RoomID }}">
+  <div id="video-grid">
+    <video id="local_video" autoplay controls muted playsinline></video>
+    <!-- remote <video> elements are appended here by video.js -->
+  </div>
+</div>
+
 <script type="text/javascript" src="/js/video.js"></script>
 {{ end }}
