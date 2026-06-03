@@ -120,6 +120,7 @@ function onWSMessage(evt) {
         removePeerVideo(msg.peerID);
       }
       if (typeof onSlotsUpdated === "function") onSlotsUpdated();
+      if (typeof onPlayerJoined === "function") onPlayerJoined(msg.peerID);
     }
     return;
   }
@@ -139,7 +140,7 @@ function onWSMessage(evt) {
   }
 
   // Dice game coordination messages (broadcast or direct).
-  if (msg.type === "game_start" || msg.type === "game_event") {
+  if (msg.type === "game_start" || msg.type === "game_event" || msg.type === "player_kick") {
     if (typeof handleDiceGameMessage === "function") {
       handleDiceGameMessage(msg);
     }

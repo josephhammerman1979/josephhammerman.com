@@ -58,6 +58,55 @@ func (g *MultiplayerPigGame) RequestHold() {
 	g.holdRequested = true
 }
 
+// Kick marks the given player slot as removed from the game.  Their turn
+// is forfeited (any in-flight TurnScore is dropped) and nextPlayer skips
+// them from now on.  Called via window.diceGameKick from JS in response to
+// a host-issued player_kick broadcast; every client invokes it locally so
+// each WASM instance stays in sync.
+//
+// If only one un-kicked player remains, the game ends with them as the
+// winner.
+func (g *MultiplayerPigGame) Kick(slot int) {
+	if slot < 0 || slot >= len(g.Players) {
+		return
+	}
+	if g.Players[slot].Kicked || g.GameOver {
+		return
+	}
+	g.Players[slot].Kicked = true
+	g.Players[slot].TurnScore = 0
+	g.Players[slot].IsActive = false
+
+	// Count remaining un-kicked players.
+	remaining := 0
+	lastIdx := -1
+	for i, p := range g.Players {
+		if !p.Kicked {
+			remaining++
+			lastIdx = i
+		}
+	}
+	if remaining <= 1 {
+		g.GameOver = true
+		if remaining == 1 {
+			g.WinnerID = g.Players[lastIdx].ID
+			if lastIdx == g.myPlayerIdx {
+				g.Message = "You win by default — every other player was kicked!"
+			} else {
+				g.Message = fmt.Sprintf("Player %d wins by default.", g.WinnerID)
+			}
+		} else {
+			g.Message = "Game over — all players were kicked."
+		}
+		return
+	}
+
+	// If we just kicked the active player, advance to the next un-kicked one.
+	if slot == g.CurrentIndex {
+		g.nextPlayer()
+	}
+}
+
 // SetTurnChangeFn registers a callback fired whenever CurrentIndex changes
 // (including the initial value reported immediately on registration).  Used
 // by the JS host to enable/disable on-screen Roll/Hold buttons and to drive
@@ -163,7 +212,18 @@ func (g *MultiplayerPigGame) applyHold(playerIdx int) {
 
 func (g *MultiplayerPigGame) nextPlayer() {
 	g.Players[g.CurrentIndex].IsActive = false
-	g.CurrentIndex = (g.CurrentIndex + 1) % len(g.Players)
+
+	// Advance to the next un-kicked player. Kick() guarantees at least two
+	// un-kicked players exist whenever this is reached (it ends the game
+	// itself when one remains), so this loop is bounded.
+	n := len(g.Players)
+	for i := 1; i <= n; i++ {
+		next := (g.CurrentIndex + i) % n
+		if !g.Players[next].Kicked {
+			g.CurrentIndex = next
+			break
+		}
+	}
 	g.Players[g.CurrentIndex].IsActive = true
 
 	if g.CurrentIndex == g.myPlayerIdx {
@@ -304,6 +364,8 @@ func DrawPlayerScoresMultiplayer(
 		var col color.RGBA
 
 		switch {
+		case player.Kicked:
+			col = color.RGBA{120, 90, 90, 255} // muted red-grey for kicked
 		case i == currentIndex && i == myPlayerIdx:
 			col = color.RGBA{255, 230, 80, 255}  // active + mine: gold
 		case i == currentIndex:
@@ -318,8 +380,14 @@ func DrawPlayerScoresMultiplayer(
 		if i == myPlayerIdx {
 			label = "You   "
 		}
-		scoreText := fmt.Sprintf("%s %d:  %d pts  (turn: %d)",
-			label, player.ID, player.TotalScore, player.TurnScore)
+		var scoreText string
+		if player.Kicked {
+			scoreText = fmt.Sprintf("%s %d:  %d pts  (kicked)",
+				label, player.ID, player.TotalScore)
+		} else {
+			scoreText = fmt.Sprintf("%s %d:  %d pts  (turn: %d)",
+				label, player.ID, player.TotalScore, player.TurnScore)
+		}
 		text.Draw(screen, scoreText, RegularFont, originX, y, col)
 		y += lineHeight
 	}

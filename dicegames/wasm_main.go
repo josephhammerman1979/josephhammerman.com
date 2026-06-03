@@ -46,6 +46,15 @@ func main() {
 		return nil
 	}))
 
+	// Expose window.diceGameKick so the host's player_kick broadcast can
+	// apply the kick locally in every peer's WASM instance.
+	js.Global().Set("diceGameKick", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) > 0 {
+			g.Kick(args[0].Int())
+		}
+		return nil
+	}))
+
 	// Bridge turn changes back to JS so the host page can enable/disable
 	// the Roll/Hold buttons and drive the mobile fullscreen takeover.
 	g.SetTurnChangeFn(func(currentIdx int) {

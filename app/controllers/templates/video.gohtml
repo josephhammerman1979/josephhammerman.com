@@ -177,11 +177,54 @@
   padding: 0.2em 0.65em;
   border-radius: 20px;
   font-size: 0.82em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
 }
 .game-player-chip.me {
   background: #3a2070;
   color: #c8a0ff;
   border-color: #7040c0;
+}
+.game-player-chip.current {
+  background: #2a4a30;
+  color: #b0e8b0;
+  border-color: #408050;
+  box-shadow: 0 0 0 1px #408050 inset;
+}
+.game-player-chip.kicked {
+  background: #2a1a1a;
+  color: #806060;
+  border-color: #503030;
+  text-decoration: line-through;
+}
+.game-player-chip .turn-timer {
+  font-family: monospace;
+  font-size: 0.85em;
+  color: #d0d090;
+  background: rgba(0,0,0,0.3);
+  padding: 0.05em 0.35em;
+  border-radius: 8px;
+}
+.game-player-chip .kick-btn {
+  background: #602020;
+  color: #ffc0c0;
+  border: 1px solid #803030;
+  width: 1.4em;
+  height: 1.4em;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0.95em;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.game-player-chip .kick-btn:hover:not(:disabled) { background: #803030; }
+.game-player-chip .kick-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 #game-container {
