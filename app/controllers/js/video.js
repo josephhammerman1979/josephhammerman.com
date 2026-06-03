@@ -8,14 +8,40 @@ function randomID() {
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
-const myID = randomID();
+
+// Stable client ID, persisted across reloads so the server can restore the
+// player's slot on refresh/rejoin.
+const CLIENT_ID_STORAGE_KEY = "pig.clientID";
+function getOrCreateClientID() {
+  let id = null;
+  try { id = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY); } catch (_) {}
+  if (!id || !/^[a-f0-9]{16}$/.test(id)) {
+    id = randomID();
+    try { window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, id); } catch (_) {}
+  }
+  return id;
+}
+const myID = getOrCreateClientID();
 const peers = Object.create(null);
 const pendingPeers = new Set();
+
+// Server-assigned slot info, populated from the "peers" and "player_joined"
+// messages. Read by dice_game.js to determine player ordering.
+let mySlot = -1;
+const playerSlots = Object.create(null);  // clientID -> slot index
 const wsScheme = window.location.protocol === "https:" ? "wss://" : "ws://";
-const ws = new WebSocket(
-  wsScheme + window.location.host + "/rooms/" + encodeURIComponent(roomID) + "/ws?userID=" + encodeURIComponent(myID)
-);
+const wsURL = wsScheme + window.location.host + "/rooms/" + encodeURIComponent(roomID) + "/ws?userID=" + encodeURIComponent(myID);
+
+let ws = null;
 let localStream = null;
+
+// Auto-reconnect state. The server preserves slot assignments across
+// disconnect, so a reconnect restores the same player number.
+const RECONNECT_MIN_MS = 500;
+const RECONNECT_MAX_MS = 10000;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let manualClose = false;
 
 // Copy invite link to clipboard
 document.getElementById("copy-link-btn").addEventListener("click", () => {
@@ -35,16 +61,40 @@ function updateLayout() {
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 }
 
-ws.onopen = () => {
-  console.log("WS connected, myID =", myID, "roomID =", roomID);
-};
+function connectWS() {
+  ws = new WebSocket(wsURL);
+  ws.onopen = onWSOpen;
+  ws.onmessage = onWSMessage;
+  ws.onclose = onWSClose;
+  ws.onerror = (err) => console.error("[WS] error:", err);
+}
 
-ws.onmessage = (evt) => {
+function scheduleReconnect() {
+  if (manualClose || reconnectTimer) return;
+  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * Math.pow(2, reconnectAttempts));
+  reconnectAttempts++;
+  console.log(`[WS] reconnect in ${delay}ms (attempt ${reconnectAttempts})`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectWS();
+  }, delay);
+}
+
+function onWSOpen() {
+  console.log("WS connected, myID =", myID, "roomID =", roomID);
+  reconnectAttempts = 0;
+}
+
+function onWSMessage(evt) {
   const msg = JSON.parse(evt.data);
   if (!msg || msg.roomID !== roomID) return;
 
-  // Server-initiated notification of existing room members.
+  // Server-initiated notification of existing room members + slot assignments.
   if (msg.type === "peers") {
+    if (typeof msg.mySlot === "number") mySlot = msg.mySlot;
+    if (msg.slots && typeof msg.slots === "object") {
+      Object.keys(msg.slots).forEach((id) => { playerSlots[id] = msg.slots[id]; });
+    }
     msg.peers.forEach((peerID) => {
       if (peerID === myID || peers[peerID]) return;
       if (localStream) {
@@ -54,6 +104,37 @@ ws.onmessage = (evt) => {
         pendingPeers.add(peerID);
       }
     });
+    if (typeof onSlotsUpdated === "function") onSlotsUpdated();
+    return;
+  }
+
+  // Server tells us a new player joined and what slot they got. If we still
+  // have a stale RTCPeerConnection for this peer (e.g. they refreshed before
+  // our ICE timeout fired), tear it down so the fresh offer creates a new one.
+  if (msg.type === "player_joined") {
+    if (msg.peerID && typeof msg.slot === "number") {
+      playerSlots[msg.peerID] = msg.slot;
+      if (peers[msg.peerID]) {
+        peers[msg.peerID].close();
+        delete peers[msg.peerID];
+        removePeerVideo(msg.peerID);
+      }
+      if (typeof onSlotsUpdated === "function") onSlotsUpdated();
+    }
+    return;
+  }
+
+  // Server tells us a peer disconnected. Tear down the RTC connection and
+  // notify the dice game so it can end any in-progress session cleanly.
+  if (msg.type === "player_left") {
+    if (msg.peerID) {
+      if (peers[msg.peerID]) {
+        peers[msg.peerID].close();
+        delete peers[msg.peerID];
+      }
+      removePeerVideo(msg.peerID);
+      if (typeof onPlayerLeft === "function") onPlayerLeft(msg.peerID);
+    }
     return;
   }
 
@@ -96,15 +177,31 @@ ws.onmessage = (evt) => {
       }
       break;
   }
-};
+}
 
-ws.onclose = () => {
+function onWSClose() {
   console.log("WS closed");
-  Object.values(peers).forEach((pc) => pc.close());
-};
+  // Drop all peer state — a fresh "peers" message on reconnect will rebuild
+  // the WebRTC mesh from scratch.
+  Object.keys(peers).forEach((peerID) => {
+    peers[peerID].close();
+    delete peers[peerID];
+    removePeerVideo(peerID);
+  });
+  pendingPeers.clear();
+  mySlot = -1;
+  Object.keys(playerSlots).forEach((id) => { delete playerSlots[id]; });
+  if (typeof onWSDisconnected === "function") onWSDisconnected();
+  scheduleReconnect();
+}
+
+window.addEventListener("beforeunload", () => {
+  manualClose = true;
+  if (ws) ws.close();
+});
 
 function sendSignal(payload) {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
   }
 }
@@ -169,6 +266,8 @@ function createPeerConnection(peerID) {
 
   return pc;
 }
+
+connectWS();
 
 navigator.mediaDevices
   .getUserMedia({ video: true, audio: true })

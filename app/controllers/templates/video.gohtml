@@ -119,6 +119,45 @@
   cursor: default;
 }
 
+/* Roll / Hold action buttons — shown while a game is running.
+   The shake gesture or SPACE/ENTER also work; these are the tap fallback. */
+#game-action-row {
+  display: none;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+#game-action-row.active { display: flex; }
+
+.game-action-btn {
+  flex: 1 1 auto;
+  min-width: 7rem;
+  padding: 0.7em 1.2em;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s, opacity 0.15s;
+}
+#roll-btn {
+  background: linear-gradient(135deg, #2080a0 0%, #40b0c0 100%);
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(40,160,200,0.45);
+}
+#hold-btn {
+  background: linear-gradient(135deg, #a06020 0%, #c08040 100%);
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(160,100,40,0.45);
+}
+.game-action-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.game-action-btn:active:not(:disabled) { transform: translateY(0); }
+.game-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 #game-status {
   color: #8888bb;
   font-size: 0.9em;
@@ -159,6 +198,70 @@
   box-shadow: 0 4px 24px rgba(60,20,120,0.7);
   border: 2px solid #4a2090;
 }
+
+/* ── Mobile fullscreen takeover ────────────────────────
+   Toggled by dice_game.js when it's the local player's turn on a narrow
+   viewport. The dice panel fills the screen so the canvas + buttons are
+   big and thumb-reachable; the video grid shrinks to a corner PIP. */
+#exit-fullscreen-btn {
+  display: none;
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 1002;
+  background: rgba(40,30,90,0.85);
+  color: #fff;
+  border: 1px solid #6040b0;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+body.dice-fullscreen { overflow: hidden; }
+
+body.dice-fullscreen #video-room-header {
+  display: none;
+}
+
+body.dice-fullscreen #video-root {
+  position: fixed;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 32vw;
+  max-width: 180px;
+  z-index: 1001;
+  padding: 0;
+}
+body.dice-fullscreen #video-grid {
+  gap: 4px;
+}
+body.dice-fullscreen #video-grid video {
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+}
+
+body.dice-fullscreen #game-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  padding: 3rem 0.75rem 0.75rem;
+  overflow-y: auto;
+  border-top: none;
+  display: flex;
+  flex-direction: column;
+}
+body.dice-fullscreen #game-panel h2 { display: none; }
+body.dice-fullscreen #game-header-row { margin-bottom: 0.5rem; }
+body.dice-fullscreen #defaultCanvas0 { max-width: 100%; }
+body.dice-fullscreen #game-action-row { margin-top: auto; }
+body.dice-fullscreen #game-action-row.active .game-action-btn {
+  padding: 1em 1.2em;
+  font-size: 1.1rem;
+}
+body.dice-fullscreen #exit-fullscreen-btn { display: block; }
 </style>{{ end }}
 
 {{ define "main" }}
@@ -183,6 +286,11 @@
     <span id="game-status"></span>
     <div id="game-player-list"></div>
   </div>
+  <div id="game-action-row">
+    <button id="roll-btn" class="game-action-btn" type="button">Roll &#127922;</button>
+    <button id="hold-btn" class="game-action-btn" type="button">Hold</button>
+  </div>
+  <button id="exit-fullscreen-btn" type="button" title="Show videos">&#9166;</button>
   <div id="game-container" style="display:none;">
     <canvas id="defaultCanvas0"></canvas>
   </div>

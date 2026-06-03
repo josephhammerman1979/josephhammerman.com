@@ -34,11 +34,26 @@ func main() {
 	}))
 
 	// Expose window.diceGameRoll so dice_game.js can request a roll from
-	// non-keyboard input (e.g. a phone shake gesture).
+	// non-keyboard input (e.g. a phone shake gesture or on-screen button).
 	js.Global().Set("diceGameRoll", js.FuncOf(func(_ js.Value, _ []js.Value) any {
 		g.RequestRoll()
 		return nil
 	}))
+
+	// Expose window.diceGameHold for the on-screen Hold button.
+	js.Global().Set("diceGameHold", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		g.RequestHold()
+		return nil
+	}))
+
+	// Bridge turn changes back to JS so the host page can enable/disable
+	// the Roll/Hold buttons and drive the mobile fullscreen takeover.
+	g.SetTurnChangeFn(func(currentIdx int) {
+		fn := js.Global().Get("diceGameOnTurnChange")
+		if fn.Truthy() {
+			fn.Invoke(currentIdx)
+		}
+	})
 
 	ebiten.SetWindowSize(game.ScreenWidth, game.ScreenHeight)
 	ebiten.SetWindowTitle("Pig Dice — Multiplayer")

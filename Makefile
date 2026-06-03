@@ -6,6 +6,9 @@ WASM_EXEC  := $(JS_OUT_DIR)/wasm_exec.js
 WASM_EXEC_SRC := $(REPO_ROOT)/third_party/wasm/wasm_exec.js
 SERVER_BIN := $(REPO_ROOT)/josephhammerman.com
 DICE_SRC   := $(shell find $(DICE_DIR) -type f -name '*.go')
+# Files embedded into the server binary via //go:embed — changes to any of
+# these must trigger a rebuild even though they are not .go sources.
+EMBED_SRC  := $(shell find $(REPO_ROOT)/app/controllers/templates $(REPO_ROOT)/app/controllers/css $(REPO_ROOT)/app/controllers/js -type f 2>/dev/null)
 
 .PHONY: all wasm build run clean vendor-wasm-exec
 
@@ -25,7 +28,7 @@ $(WASM_EXEC): $(WASM_EXEC_SRC)
 
 build: wasm $(SERVER_BIN)
 
-$(SERVER_BIN): $(shell find $(REPO_ROOT)/app -type f -name '*.go') $(REPO_ROOT)/server.go
+$(SERVER_BIN): $(shell find $(REPO_ROOT)/app -type f -name '*.go') $(REPO_ROOT)/server.go $(EMBED_SRC)
 	@echo "==> Building server"
 	go build -o $@ .
 

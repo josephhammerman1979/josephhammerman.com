@@ -39,7 +39,9 @@ type MultiplayerPigGame struct {
 	sendEventFn   func(string) // relay game event JSON to peers
 	pendingEvent  *GameEvent   // received from network, applied on next Update
 	localRolling  bool         // waiting for local animation + settle to finish
-	rollRequested bool         // set by external input (e.g. phone shake)
+	rollRequested bool         // set by external input (e.g. phone shake / Roll button)
+	holdRequested bool         // set by external input (Hold button)
+	turnChangeFn  func(int)    // optional: invoked with CurrentIndex on every turn change
 }
 
 // RequestRoll asks the game to roll on the next Update, as if the local
@@ -47,6 +49,24 @@ type MultiplayerPigGame struct {
 // and the die is idle.
 func (g *MultiplayerPigGame) RequestRoll() {
 	g.rollRequested = true
+}
+
+// RequestHold asks the game to hold on the next Update, as if the local
+// player had pressed ENTER.  Ignored unless it is the local player's turn
+// and the die is idle.
+func (g *MultiplayerPigGame) RequestHold() {
+	g.holdRequested = true
+}
+
+// SetTurnChangeFn registers a callback fired whenever CurrentIndex changes
+// (including the initial value reported immediately on registration).  Used
+// by the JS host to enable/disable on-screen Roll/Hold buttons and to drive
+// the mobile fullscreen takeover.
+func (g *MultiplayerPigGame) SetTurnChangeFn(fn func(int)) {
+	g.turnChangeFn = fn
+	if fn != nil {
+		fn(g.CurrentIndex)
+	}
 }
 
 func NewMultiplayerPigGame(numPlayers, myPlayerIdx int, sendEventFn func(string)) *MultiplayerPigGame {
@@ -151,6 +171,9 @@ func (g *MultiplayerPigGame) nextPlayer() {
 	} else {
 		g.Message = fmt.Sprintf("Player %d's turn...", g.Players[g.CurrentIndex].ID)
 	}
+	if g.turnChangeFn != nil {
+		g.turnChangeFn(g.CurrentIndex)
+	}
 }
 
 func (g *MultiplayerPigGame) Update() error {
@@ -190,8 +213,9 @@ func (g *MultiplayerPigGame) Update() error {
 	// Only accept input when it is our turn and the die is idle.
 	if g.CurrentIndex != g.myPlayerIdx ||
 		g.Die.Animating || g.Die.Settling || g.localRolling {
-		// Drop any stale shake-roll request: it should only apply on our turn.
+		// Drop any stale shake-roll / button-press requests: they only apply on our turn.
 		g.rollRequested = false
+		g.holdRequested = false
 		return nil
 	}
 
@@ -208,7 +232,8 @@ func (g *MultiplayerPigGame) Update() error {
 		g.inputCooldown = 10
 	}
 
-	if ebiten.IsKeyPressed(ebiten.KeyEnter) {
+	if ebiten.IsKeyPressed(ebiten.KeyEnter) || g.holdRequested {
+		g.holdRequested = false
 		g.broadcast(GameEvent{Action: "hold", PlayerIdx: g.myPlayerIdx})
 		g.applyHold(g.myPlayerIdx)
 		g.inputCooldown = 10
