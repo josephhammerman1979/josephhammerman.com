@@ -329,11 +329,9 @@ navigator.mediaDevices
     pendingPeers.clear();
     return localVideo.play();
   })
-  .catch((err) => console.error("Error getting user media", err))
-  .finally(() => {
-    // Dice rooms (created via "Create Dice Room") auto-start the game.
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("game") === "dice" && typeof startDiceGame === "function") {
-      startDiceGame();
-    }
-  });
+  .catch((err) => console.error("Error getting user media", err));
+// Note: Dice rooms used to auto-start the game on entry (when the URL had
+// ?game=dice) but that fired before any peers had joined, leaving the
+// first player rolling against no one. The game now starts only when the
+// user explicitly clicks Start Game, by which time they've had a chance
+// to share the invite link and wait for peers.

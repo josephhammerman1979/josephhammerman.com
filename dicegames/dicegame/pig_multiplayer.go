@@ -302,6 +302,7 @@ func (g *MultiplayerPigGame) Reset(numPlayers, myPlayerIdx int, variant string) 
 	} else {
 		g.Die2 = nil
 	}
+	g.setupDiceBounce()
 
 	g.Message = g.initialTurnMessage()
 	if g.turnChangeFn != nil {
@@ -331,8 +332,40 @@ func NewMultiplayerPigGame(numPlayers, myPlayerIdx int, variant string, sendEven
 	if variant == VariantBigPig {
 		g.Die2 = NewDice()
 	}
+	g.setupDiceBounce()
 	g.Message = g.initialTurnMessage()
 	return g
+}
+
+// setupDiceBounce pins each die's home position + play-area rectangle so
+// rolls launch from a fixed spot and tumble inside the right-hand panel
+// before settling. The numbers here mirror DrawPlayArea's geometry — the
+// dice live in the right ~260px column of the 800×600 canvas.
+func (g *MultiplayerPigGame) setupDiceBounce() {
+	playMinX := float64(ScreenWidth - 260 + 18)
+	playMinY := float64(160)
+	playMaxX := float64(ScreenWidth - 18)
+	playMaxY := float64(ScreenHeight - 90)
+
+	if g.Die2 == nil {
+		// Single die — centered in the play area.
+		size := 110.0
+		g.Die.Size = size
+		homeX := (playMinX+playMaxX)/2 - size/2
+		homeY := (playMinY+playMaxY)/2 - size/2
+		g.Die.SetBounceArea(homeX, homeY, playMinX, playMinY, playMaxX, playMaxY)
+		return
+	}
+
+	// Two dice — side by side, centered in the play area.
+	size := 90.0
+	gap := 18.0
+	totalW := size*2 + gap
+	leftX := (playMinX+playMaxX)/2 - totalW/2
+	homeY := (playMinY+playMaxY)/2 - size/2
+	g.Die.Size, g.Die2.Size = size, size
+	g.Die.SetBounceArea(leftX, homeY, playMinX, playMinY, playMaxX, playMaxY)
+	g.Die2.SetBounceArea(leftX+size+gap, homeY, playMinX, playMinY, playMaxX, playMaxY)
 }
 
 func (g *MultiplayerPigGame) initialTurnMessage() string {
@@ -612,17 +645,12 @@ func (g *MultiplayerPigGame) Draw(screen *ebiten.Image) {
 	// Player score list (left side)
 	DrawPlayerScoresMultiplayer(screen, g.Players, g.CurrentIndex, g.myPlayerIdx, 24, 120)
 
-	// Dice — single centered die for Pig; pair for BigPig.
-	if g.Die2 == nil {
-		g.Die.Draw(screen, ScreenWidth-205, ScreenHeight/2-55, 110)
-	} else {
-		dieSize := 90
-		gap := 20
-		totalW := dieSize*2 + gap
-		baseX := ScreenWidth - 130 - totalW/2
-		dieY := ScreenHeight/2 - dieSize/2
-		g.Die.Draw(screen, baseX, dieY, dieSize)
-		g.Die2.Draw(screen, baseX+dieSize+gap, dieY, dieSize)
+	// Dice — drawn at their physics-driven position. setupDiceBounce sets
+	// Size and HomeX/Y so even when idle (X = HomeX, Y = HomeY) the die is
+	// centered in the right-hand play-area panel.
+	g.Die.Draw(screen, int(g.Die.X), int(g.Die.Y), int(g.Die.Size))
+	if g.Die2 != nil {
+		g.Die2.Draw(screen, int(g.Die2.X), int(g.Die2.Y), int(g.Die2.Size))
 	}
 
 	// Footer instructions

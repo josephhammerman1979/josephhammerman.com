@@ -119,14 +119,18 @@ function _initDiceGame(roster, hostID, variant) {
 
   diceGameRunning = true;
 
-  // Show the canvas panel + state panel + action buttons; hide the Start button.
+  // Show the canvas panel + state panel + action buttons. Hide Start, but
+  // surface the New Game button so the user has an obvious way to restart
+  // mid-round (otherwise auto-start rooms had no findable restart control).
   const container = document.getElementById("game-container");
   const statePanel = document.getElementById("game-state-panel");
   const startBtn  = document.getElementById("start-game-btn");
+  const newGameBtn = document.getElementById("new-game-btn");
   const actionRow = document.getElementById("game-action-row");
   if (container)  container.style.display  = "block";
   if (statePanel) statePanel.style.display = "flex";
   if (startBtn)   startBtn.style.display   = "none";
+  if (newGameBtn) newGameBtn.style.display = "inline-block";
   if (actionRow)  actionRow.classList.add("active");
   _renderStatePanelFromRoster();
 
@@ -214,12 +218,17 @@ function _resetGameState() {
   _refreshFullscreen();
 }
 
-// Click handler for the "New Game" button shown after the game ends.
-// Resets local state and broadcasts a fresh game_start; peers also reset
-// when they see the broadcast (they're either gameEnded already, or were
-// spectators of the finished round).
+// Click handler for the New Game button. Works whether a game is in
+// progress (treated as an immediate restart), already ended, or never
+// started — clears local state and broadcasts a fresh game_start so peers
+// reset too. The button is always visible after the first game starts so
+// the user can find it; mid-game clicks abandon the current round.
 function startNewGame() {
-  if (!gameEnded && !(diceGameRunning || diceGameSpectating)) return;
+  if (diceGameRunning && !gameEnded) {
+    if (!confirm("Restart the game now? This ends the current round for everyone.")) {
+      return;
+    }
+  }
   _resetGameState();
   startDiceGame();
 }
@@ -478,6 +487,13 @@ async function _loadWasm() {
   try {
     if (statusEl) statusEl.textContent = "Loading game…";
 
+    // Ebiten v2 in WASM mode creates its own <canvas> in init() and
+    // appendChild's it to document.body — we don't get to pick the target.
+    // It also overwrites body { background:#000; height:100%; margin:0 }
+    // and html { height:100%; margin:0 } which clobbers the rest of the
+    // page styling. Intercept those side effects:
+    _captureEbitenCanvas();
+
     // The Go constructor comes from /js/wasm_exec.js (loaded in <head>).
     const go = new Go();
     const result = await WebAssembly.instantiateStreaming(
@@ -492,6 +508,83 @@ async function _loadWasm() {
   }
 }
 
+// Watch document.body for the canvas Ebiten injects at WASM startup, move
+// it into #game-container, and undo the document/body style clobbering
+// Ebiten does as part of its native-window setup. Runs once per session
+// (WASM module is loaded only on the first game start).
+function _captureEbitenCanvas() {
+  if (window._ebitenCanvasCaptured) return;
+  window._ebitenCanvasCaptured = true;
+
+  const container = document.getElementById("game-container");
+  if (!container) return;
+
+  // Note any canvases that exist before WASM runs so we can distinguish
+  // Ebiten's new one from anything we already had on the page (videos,
+  // etc. are not canvases — but the picker is defensive anyway).
+  const preExisting = new Set(document.querySelectorAll("canvas"));
+
+  const reparent = (canvas) => {
+    container.appendChild(canvas);
+    // Strip the inline width/height Ebiten set so our CSS wins.
+    canvas.style.width  = "";
+    canvas.style.height = "";
+    canvas.style.margin = "";
+    canvas.style.padding = "";
+    _restoreBodyStyles();
+  };
+
+  // Some canvases might already be appended in the same tick the WASM
+  // module's init runs; check synchronously first.
+  document.querySelectorAll("body > canvas").forEach((c) => {
+    if (!preExisting.has(c)) reparent(c);
+  });
+
+  const obs = new MutationObserver((muts) => {
+    for (const m of muts) {
+      for (const node of m.addedNodes) {
+        if (node.nodeType === 1 && node.tagName === "CANVAS" &&
+            !preExisting.has(node) && node.parentNode === document.body) {
+          reparent(node);
+        }
+      }
+    }
+    // Body styles can be set after the canvas append too — keep restoring
+    // for a short while after the canvas appears.
+    _restoreBodyStyles();
+  });
+  obs.observe(document.body, { childList: true });
+
+  // Ebiten may set body styles in a few separate frames during init; keep
+  // resetting for ~2s after WASM load so we win the last write.
+  let resetCount = 0;
+  const ticker = setInterval(() => {
+    _restoreBodyStyles();
+    if (++resetCount > 30) {
+      clearInterval(ticker);
+      // Stop observing after Ebiten is fully settled.
+      obs.disconnect();
+    }
+  }, 67);
+}
+
+// Reset the body/html style fields Ebiten's UI init writes. We blank the
+// values so the cascade re-applies the page's app.css rules instead.
+function _restoreBodyStyles() {
+  const b = document.body.style;
+  if (b.backgroundColor === "rgb(0, 0, 0)" || b.backgroundColor === "#000" ||
+      b.backgroundColor === "black") {
+    b.backgroundColor = "";
+  }
+  if (b.height === "100%") b.height = "";
+  if (b.margin === "0px" || b.margin === "0") b.margin = "";
+  if (b.padding === "0px" || b.padding === "0") b.padding = "";
+  const h = document.documentElement.style;
+  if (h.height === "100%") h.height = "";
+  if (h.margin === "0px" || h.margin === "0") h.margin = "";
+  if (h.padding === "0px" || h.padding === "0") h.padding = "";
+}
+
 // ── Incoming WebSocket message handler ───────────────────────────────────────
 
 /**
@@ -501,11 +594,14 @@ function handleDiceGameMessage(msg) {
   switch (msg.type) {
     case "game_start":
       if (!Array.isArray(msg.roster)) break;
-      // Ignore game_start while a game is actively running here.  But if the
-      // last game ended, or we were spectating a finished round, accept the
-      // fresh broadcast — _resetGameState drops the stale state first.
-      if (diceGameRunning && !gameEnded) break;
-      if (diceGameSpectating || gameEnded) _resetGameState();
+      // Accept any game_start broadcast — it's a unilateral restart. If we
+      // were already running we treat it as a peer-initiated restart and
+      // drop our local state first. (Restart was previously ignored mid-
+      // round, which made the New Game button useless for everyone except
+      // the clicker.)
+      if (diceGameRunning || diceGameSpectating || gameEnded) {
+        _resetGameState();
+      }
       _initDiceGame(msg.roster, msg.from, msg.variant);
       // Replay any kicks the host already applied so a refreshed-mid-game
       // rejoin comes back to the same logical state.

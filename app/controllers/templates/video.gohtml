@@ -267,19 +267,28 @@
   cursor: not-allowed;
 }
 
+/* Responsive canvas — Ebiten sets the logical size; CSS scales it.
+   The canvas selector targets whatever <canvas> Ebiten ends up creating
+   inside this container, not a specific ID, because Ebiten v2 doesn't let
+   us pick the element. We override Ebiten's inline width: 100%; height:
+   100% with our own constrained sizing. height: auto lets the browser
+   derive a non-distorting display height from the canvas's intrinsic
+   dimensions, which Ebiten ties to body.clientWidth × DPR each frame. */
 #game-container {
   margin-top: 0.75rem;
-}
-
-/* Responsive canvas — Ebiten sets the logical size; CSS scales it. */
-#defaultCanvas0 {
-  display: block;
   max-width: 800px;
-  width: 100%;
-  height: auto;
+}
+#game-container canvas {
+  display: block !important;
+  max-width: 800px !important;
+  width: 100% !important;
+  height: auto !important;
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(60,20,120,0.7);
   border: 2px solid #4a2090;
+  margin: 0 auto;
+  outline: none;
+  background: #12121f;
 }
 
 /* ── DOM game-state panel ──────────────────────────────
@@ -336,6 +345,20 @@
 .die-face[data-value="5"]::before { content: "5"; }
 .die-face[data-value="6"]::before { content: "6"; }
 .die-face.rolling::before { content: "🎲"; }
+.die-face.rolling {
+  animation: dice-roll-toss 0.55s ease-in-out infinite alternate;
+}
+.die-face.rolling:nth-child(2) {
+  animation-duration: 0.5s;
+  animation-delay: -0.1s;
+}
+@keyframes dice-roll-toss {
+  0%   { transform: translate(-12px, -4px) rotate(-26deg) scale(0.95); }
+  25%  { transform: translate(8px, -22px)  rotate(48deg)  scale(1.08); }
+  50%  { transform: translate(18px, 6px)   rotate(82deg)  scale(1.0);  }
+  75%  { transform: translate(-6px, -14px) rotate(-32deg) scale(1.04); }
+  100% { transform: translate(-16px, 4px)  rotate(-72deg) scale(0.97); }
+}
 #game-state-die-label {
   color: #c8c8e6;
   font-size: 0.95rem;
@@ -451,7 +474,8 @@ body.dice-fullscreen #game-status { font-size: 0.8em; }
    state panel to fill the available space and hide the canvas entirely.
    The panel already shows scores, turn message, and die value — everything
    the canvas would have shown — and renders reliably. */
-body.dice-fullscreen #game-container { display: none !important; }
+body.dice-fullscreen #game-container,
+body.dice-fullscreen #game-container canvas { display: none !important; }
 
 body.dice-fullscreen #game-state-panel {
   margin-top: 0;
@@ -526,9 +550,11 @@ body.dice-fullscreen #exit-fullscreen-btn { display: block; }
     </div>
     <ul id="game-state-scores"></ul>
   </div>
-  <div id="game-container" style="display:none;">
-    <canvas id="defaultCanvas0"></canvas>
-  </div>
+  <!-- Ebiten v2 always creates its own <canvas> and appends it to
+       document.body at runtime; dice_game.js intercepts that and moves it
+       into this container so it renders inside the bordered area instead
+       of stacked below the page footer. -->
+  <div id="game-container" style="display:none;"></div>
 </div>
 
 <script src="/js/wasm_exec.js"></script>
