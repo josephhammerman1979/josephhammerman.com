@@ -53,18 +53,47 @@ document.getElementById("copy-link-btn").addEventListener("click", () => {
   });
 });
 
-// SMS / Email invite buttons. On phones, sms:?body=… opens the native
-// Messages composer; mailto:?subject=…&body=… opens the default mail app.
-// On desktop they hand off to whichever protocol handler is registered.
+// SMS invite. On mobile we prefer the native share sheet (Web Share API)
+// which lets the user pick Messages, WhatsApp, etc. without us hard-coding
+// the sms: protocol — that one has been flaky across iOS Safari versions
+// and Android Chrome (and pops a confirmation that the user has to accept,
+// which is what got removed here). On desktop / unsupported browsers we
+// fall back to navigator.clipboard.writeText with a brief "Copied!" hint
+// so the user can paste into whichever app they prefer.
 (function setupShareButtons() {
-  const url     = window.location.href;
-  const subject = "Join my video room";
-  const body    = "Join me in this video room: " + url;
-  const smsBtn   = document.getElementById("share-sms-btn");
-  const emailBtn = document.getElementById("share-email-btn");
-  if (smsBtn)   smsBtn.href   = "sms:?&body=" + encodeURIComponent(body);
-  if (emailBtn) emailBtn.href = "mailto:?subject=" + encodeURIComponent(subject)
-                              + "&body=" + encodeURIComponent(body);
+  const smsBtn = document.getElementById("share-sms-btn");
+  if (!smsBtn) return;
+
+  const flash = (msg, ms = 1600) => {
+    const original = smsBtn.textContent;
+    smsBtn.textContent = msg;
+    setTimeout(() => { smsBtn.textContent = original; }, ms);
+  };
+
+  smsBtn.addEventListener("click", async () => {
+    const url  = window.location.href;
+    const text = "Join me in this room: " + url;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Join my room", text, url });
+        return;
+      } catch (err) {
+        // User cancelled or share failed — fall through to clipboard.
+        if (err && err.name === "AbortError") return;
+      }
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        flash("Copied to clipboard");
+        return;
+      } catch (_) { /* fall through */ }
+    }
+
+    flash("Share unavailable");
+  });
 })();
 
 // Resize all videos based on how many are present

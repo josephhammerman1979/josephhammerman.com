@@ -21,17 +21,35 @@ let gameEnded = false;
 let gameRoster = [];     // ordered list of clientIDs participating in the current game
 let gameHostID = null;   // clientID of the host (first to send game_start)
 let myGameSlot = -1;     // our index within gameRoster, or -1 if spectator
+let currentVariant = "pig";    // active game's rules variant ("pig" | "bigpig")
 const kickedSlots = new Set(); // game-roster indices that have been kicked
+
+// kickedClientIDs persists ACROSS rounds for the lifetime of the page —
+// once a player is booted for AFK, they stay out of subsequent automatic
+// rosters even though their server slot is still active. (A page reload
+// clears it, by design: it's session-scoped, not durable punishment.)
+const kickedClientIDs = new Set();
 
 // Build a clientID list ordered by server-assigned slot index. Used to
 // snapshot the roster at game_start time and to render the chip list before
-// a game has started.
+// a game has started.  Excludes clientIDs in kickedClientIDs so that
+// next-round auto-rosters skip players the host already kicked.
 function _playerListBySlot() {
   const out = [];
   Object.keys(playerSlots).forEach((id) => {
     out[playerSlots[id]] = id;
   });
-  return out.filter((id) => typeof id === "string");
+  return out
+    .filter((id) => typeof id === "string")
+    .filter((id) => !kickedClientIDs.has(id));
+}
+
+// Read the variant picker; default to "pig" if the element is missing or
+// the value isn't one of our known variants.
+function _selectedVariant() {
+  const sel = document.getElementById("game-variant");
+  if (!sel) return "pig";
+  return sel.value === "bigpig" ? "bigpig" : "pig";
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -39,42 +57,51 @@ function _playerListBySlot() {
 /**
  * Start a new game session.  Called when the local user clicks the Start button.
  * The caller becomes the host: their snapshot of the current playerSlots is
- * frozen as the game roster, and only they can kick AFK players.
+ * frozen as the game roster, and only they can kick AFK players.  Players
+ * already kicked for AFK in a prior round are excluded automatically.
  */
 function startDiceGame() {
   if (diceGameRunning || diceGameSpectating) return;
   if (gameEnded) _resetGameState();
 
-  const roster = _playerListBySlot();
+  const roster  = _playerListBySlot();   // already filters kickedClientIDs
+  const variant = _selectedVariant();
   if (roster.length === 0) return;
 
-  // Broadcast roster + host identity so every peer agrees on who is playing.
+  // Broadcast roster + variant + host identity so every peer agrees on who
+  // is playing and which ruleset is in effect.
   sendSignal({
-    type:   "game_start",
-    from:   myID,
-    to:     "room",
-    roomID: roomID,
-    roster: roster,
+    type:    "game_start",
+    from:    myID,
+    to:      "room",
+    roomID:  roomID,
+    roster:  roster,
+    variant: variant,
   });
 
-  _initDiceGame(roster, myID);
+  _initDiceGame(roster, myID, variant);
 }
 
 /**
- * Initialise the game for a specific roster, with a specific host.
+ * Initialise the game for a specific roster + variant, with a specific host.
  * If our clientID isn't in the roster (we joined after the host clicked
  * Start), we drop into spectator mode — chips render, no WASM, no buttons.
  * Safe to call multiple times — re-entrant calls are silently ignored while
  * the game is running.
  */
-function _initDiceGame(roster, hostID) {
+function _initDiceGame(roster, hostID, variant) {
   if (diceGameRunning || diceGameSpectating) return;
   if (!Array.isArray(roster) || roster.length === 0) return;
 
-  gameRoster  = roster.slice();
-  gameHostID  = hostID;
-  myGameSlot  = roster.indexOf(myID);
+  gameRoster      = roster.slice();
+  gameHostID      = hostID;
+  myGameSlot      = roster.indexOf(myID);
+  currentVariant  = variant === "bigpig" ? "bigpig" : "pig";
   kickedSlots.clear();
+
+  // Reflect the variant in the picker (visible to the user, disabled while
+  // a game is in progress) so spectators see what's running.
+  _syncVariantPicker();
 
   // Spectator path: joined after game_start, not in the roster.
   if (myGameSlot < 0) {
@@ -85,27 +112,34 @@ function _initDiceGame(roster, hostID) {
     if (statusEl) statusEl.textContent = "Game in progress — waiting for next round.";
     _updateGamePlayerList(roster, -1);
     _ensureChipTick();
+    _syncVariantPicker();
+    _refreshFullscreen();
     return;
   }
 
   diceGameRunning = true;
 
-  // Show the canvas panel + action buttons; hide the Start button.
+  // Show the canvas panel + state panel + action buttons; hide the Start button.
   const container = document.getElementById("game-container");
+  const statePanel = document.getElementById("game-state-panel");
   const startBtn  = document.getElementById("start-game-btn");
   const actionRow = document.getElementById("game-action-row");
-  if (container) container.style.display = "block";
-  if (startBtn)  startBtn.style.display  = "none";
-  if (actionRow) actionRow.classList.add("active");
+  if (container)  container.style.display  = "block";
+  if (statePanel) statePanel.style.display = "flex";
+  if (startBtn)   startBtn.style.display   = "none";
+  if (actionRow)  actionRow.classList.add("active");
+  _renderStatePanelFromRoster();
 
   _updateGamePlayerList(roster, myGameSlot);
   _setupActionButtons();
   _ensureChipTick();
+  _refreshFullscreen();
 
   // Configuration read by the Go WASM runtime at startup.
   window.diceGameConfig = {
     numPlayers:  roster.length,
     myPlayerIdx: myGameSlot,
+    gameType:    currentVariant,
   };
 
   // Called by the Go game whenever the local player takes an action.
@@ -126,36 +160,58 @@ function _initDiceGame(roster, hostID) {
   // If a previous game already loaded the WASM module, reset it in-place
   // (the Ebiten run loop is still alive). Otherwise instantiate fresh.
   if (typeof window.diceGameReset === "function") {
-    window.diceGameReset(roster.length, myGameSlot);
+    window.diceGameReset(roster.length, myGameSlot, currentVariant);
   } else {
     window.diceGameConfig = {
       numPlayers:  roster.length,
       myPlayerIdx: myGameSlot,
+      gameType:    currentVariant,
     };
     _loadWasm();
   }
 }
 
+// Keep the variant picker visually in sync with the active game and disable
+// it while a round is in flight (locking the variant prevents mid-game
+// switching from desyncing peers).
+function _syncVariantPicker() {
+  const sel = document.getElementById("game-variant");
+  if (!sel) return;
+  if (currentVariant === "bigpig" || currentVariant === "pig") {
+    sel.value = currentVariant;
+  }
+  sel.disabled = diceGameRunning || diceGameSpectating;
+}
+
 // Clear all per-game state in preparation for a fresh round.  Does not
 // touch the WASM (a subsequent _initDiceGame will call diceGameReset).
+// kickedClientIDs is deliberately NOT cleared — kicks for AFK persist across
+// rounds for the page lifetime.
 function _resetGameState() {
-  diceGameRunning    = false;
-  diceGameSpectating = false;
-  gameEnded          = false;
-  gameRoster         = [];
-  gameHostID         = null;
-  myGameSlot         = -1;
-  currentTurnIdx     = -1;
-  turnStartedAt      = 0;
+  diceGameRunning         = false;
+  diceGameSpectating      = false;
+  gameEnded               = false;
+  gameRoster              = [];
+  gameHostID              = null;
+  myGameSlot              = -1;
+  currentTurnIdx          = -1;
+  turnStartedAt           = 0;
+  userRequestedFullscreen = false;
   kickedSlots.clear();
   if (chipTickHandle) { clearInterval(chipTickHandle); chipTickHandle = null; }
 
   const newGameBtn = document.getElementById("new-game-btn");
   const statusEl   = document.getElementById("game-status");
   const actionRow  = document.getElementById("game-action-row");
+  const statePanel = document.getElementById("game-state-panel");
+  const enterFsBtn = document.getElementById("enter-fullscreen-btn");
   if (newGameBtn) newGameBtn.style.display = "none";
   if (statusEl)   statusEl.textContent = "";
   if (actionRow)  actionRow.classList.remove("active");
+  if (statePanel) statePanel.style.display = "none";
+  if (enterFsBtn) enterFsBtn.style.display = "none";
+  _syncVariantPicker();
+  _refreshFullscreen();
 }
 
 // Click handler for the "New Game" button shown after the game ends.
@@ -168,10 +224,13 @@ function startNewGame() {
   startDiceGame();
 }
 
-// Wire the New Game button once on script load.
-(function setupNewGameButton() {
-  const btn = document.getElementById("new-game-btn");
-  if (btn) btn.addEventListener("click", startNewGame);
+// Wire the Start / New Game buttons once on script load.  Start is the
+// initial entry point; New Game is what appears after a finished round.
+(function setupGameButtons() {
+  const startBtn = document.getElementById("start-game-btn");
+  if (startBtn) startBtn.addEventListener("click", startDiceGame);
+  const newGameBtn = document.getElementById("new-game-btn");
+  if (newGameBtn) newGameBtn.addEventListener("click", startNewGame);
 })();
 
 // ── On-screen Roll / Hold buttons ────────────────────────────────────────────
@@ -213,7 +272,115 @@ window.diceGameOnGameOver = function(_winnerIdx) {
   gameEnded = true;
   const newGameBtn = document.getElementById("new-game-btn");
   if (newGameBtn) newGameBtn.style.display = "inline-block";
+  // Let the picker re-enable so the user can choose a different variant for
+  // the next round.  The new game won't start until they click New Game.
+  const sel = document.getElementById("game-variant");
+  if (sel) sel.disabled = false;
+  _refreshFullscreen();
 };
+
+// Called by the WASM whenever any scoring / turn / message state changes.
+// Paints the DOM state panel — which is the source of truth for mobile
+// fullscreen mode (where the canvas is hidden) and a redundancy on desktop
+// so the player never has to squint at the canvas to read their score.
+window.diceGameOnStateChange = function(jsonStr) {
+  let state;
+  try { state = JSON.parse(jsonStr); } catch (_) { return; }
+  _renderStatePanel(state);
+};
+
+function _renderStatePanel(state) {
+  const panel    = document.getElementById("game-state-panel");
+  const msgEl    = document.getElementById("game-state-message");
+  const facesEl  = document.getElementById("game-state-die-faces");
+  const dieLabel = document.getElementById("game-state-die-label");
+  const scoresEl = document.getElementById("game-state-scores");
+  if (!panel || !msgEl || !facesEl || !dieLabel || !scoresEl) return;
+
+  if (panel.style.display === "none" || panel.style.display === "") {
+    panel.style.display = "flex";
+  }
+
+  msgEl.textContent = state.message || "";
+  msgEl.classList.remove("theirs", "game-over");
+  if (state.gameOver) {
+    msgEl.classList.add("game-over");
+  } else if (typeof state.currentIndex === "number" &&
+             typeof state.myPlayerIdx === "number" &&
+             state.currentIndex !== state.myPlayerIdx) {
+    msgEl.classList.add("theirs");
+  }
+
+  // Render one die face per dieValues entry.  For BigPig that's two faces;
+  // for Pig it's one. While rolling, faces show the dice emoji.
+  const rawVals = Array.isArray(state.dieValues) ? state.dieValues : [];
+  // Ensure at least 1 face when we know the variant but the array is empty
+  // (initial render before WASM fires its first state event).
+  const slots = Math.max(1, rawVals.length);
+  const facesHTML = [];
+  for (let i = 0; i < slots; i++) {
+    const v = state.rolling ? 0 : Math.max(0, Math.min(6, rawVals[i] || 0));
+    const cls = "die-face" + (state.rolling ? " rolling" : "");
+    facesHTML.push(`<div class="${cls}" data-value="${v}"></div>`);
+  }
+  facesEl.innerHTML = facesHTML.join("");
+
+  if (state.rolling) {
+    dieLabel.textContent = "Rolling…";
+  } else if (rawVals.length === 2 && rawVals[0] > 0 && rawVals[1] > 0) {
+    dieLabel.textContent =
+      `Last roll: ${rawVals[0]} + ${rawVals[1]} = ${rawVals[0] + rawVals[1]}`;
+  } else if (rawVals.length >= 1 && rawVals[0] > 0) {
+    dieLabel.textContent = "Last roll: " + rawVals[0];
+  } else {
+    dieLabel.textContent = "Waiting for a roll…";
+  }
+
+  const players = Array.isArray(state.players) ? state.players : [];
+  scoresEl.innerHTML = players.map((p, idx) => {
+    const isMe      = idx === state.myPlayerIdx;
+    const isCurrent = idx === state.currentIndex && !p.kicked && !state.gameOver;
+    const classes = [];
+    if (isMe)      classes.push("me");
+    if (isCurrent) classes.push("current");
+    if (p.kicked)  classes.push("kicked");
+    const label = isMe ? `You (P${p.id})` : `Player ${p.id}`;
+    const kickedMark = p.kicked ? " (kicked)" : "";
+    const turn = (!p.kicked && p.turnScore > 0)
+      ? `<span class="player-turn">turn +${p.turnScore}</span>`
+      : "";
+    return `<li class="${classes.join(" ")}">`
+         +   `<span class="player-label">${label}${kickedMark}</span>`
+         +   turn
+         +   `<span class="player-score">${p.totalScore} pts</span>`
+         + `</li>`;
+  }).join("");
+}
+
+// Pre-WASM placeholder render so the panel shows player slots immediately
+// when the game starts, before the WASM has emitted its first state change.
+function _renderStatePanelFromRoster() {
+  if (!gameRoster.length) return;
+  const numDice = currentVariant === "bigpig" ? 2 : 1;
+  _renderStatePanel({
+    variant:      currentVariant,
+    currentIndex: 0,
+    myPlayerIdx:  myGameSlot,
+    message:      myGameSlot === 0
+      ? "Your turn — press Roll to begin"
+      : "Waiting for Player 1 to roll…",
+    gameOver:  false,
+    winnerID:  0,
+    dieValues: new Array(numDice).fill(0),
+    rolling:   false,
+    players:   gameRoster.map((_, i) => ({
+      id:         i + 1,
+      totalScore: 0,
+      turnScore:  0,
+      kicked:     kickedSlots.has(i),
+    })),
+  });
+}
 
 // Called by the WASM whenever the current player changes (also once at game
 // start with the initial CurrentIndex).  Tracks the value, resets the AFK
@@ -256,22 +423,43 @@ window.diceGameOnTurnChange = function(currentIdx) {
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 768px)";
 let userMinimizedFullscreen = false;
+// Set true when the user explicitly clicks the Fullscreen button — overrides
+// the "only auto-enter on my turn" gate so spectators / off-turn players can
+// also use the bigger view.  Cleared on game end or when the user exits.
+let userRequestedFullscreen = false;
 
 function _refreshFullscreen() {
-  const wantFullscreen =
-    diceGameRunning &&
-    currentTurnIdx === myGameSlot &&
-    !userMinimizedFullscreen &&
-    window.matchMedia(NARROW_VIEWPORT_QUERY).matches;
+  const narrow  = window.matchMedia(NARROW_VIEWPORT_QUERY).matches;
+  const inGame  = diceGameRunning || diceGameSpectating;
+  const autoOn  = diceGameRunning && currentTurnIdx === myGameSlot && !userMinimizedFullscreen;
+  const wantFullscreen = inGame && narrow && (autoOn || userRequestedFullscreen);
   document.body.classList.toggle("dice-fullscreen", wantFullscreen);
+
+  // The re-enter button shows whenever fullscreen would be useful (narrow +
+  // game running) but isn't currently active — i.e. the user has exited, or
+  // it's not their turn and they haven't asked for it yet.
+  const enterBtn = document.getElementById("enter-fullscreen-btn");
+  if (enterBtn) {
+    const showEnter = inGame && narrow && !wantFullscreen;
+    enterBtn.style.display = showEnter ? "inline-block" : "none";
+  }
 }
 
-// Wire the exit button + viewport-change listener once on script load.
+// Wire the exit + re-enter fullscreen controls and the viewport listener.
 (function setupFullscreenControls() {
-  const exitBtn = document.getElementById("exit-fullscreen-btn");
+  const exitBtn  = document.getElementById("exit-fullscreen-btn");
+  const enterBtn = document.getElementById("enter-fullscreen-btn");
   if (exitBtn) {
     exitBtn.addEventListener("click", () => {
       userMinimizedFullscreen = true;
+      userRequestedFullscreen = false;
+      _refreshFullscreen();
+    });
+  }
+  if (enterBtn) {
+    enterBtn.addEventListener("click", () => {
+      userMinimizedFullscreen = false;
+      userRequestedFullscreen = true;
       _refreshFullscreen();
     });
   }
@@ -318,7 +506,7 @@ function handleDiceGameMessage(msg) {
       // fresh broadcast — _resetGameState drops the stale state first.
       if (diceGameRunning && !gameEnded) break;
       if (diceGameSpectating || gameEnded) _resetGameState();
-      _initDiceGame(msg.roster, msg.from);
+      _initDiceGame(msg.roster, msg.from, msg.variant);
       // Replay any kicks the host already applied so a refreshed-mid-game
       // rejoin comes back to the same logical state.
       if (Array.isArray(msg.kicked)) {
@@ -369,12 +557,13 @@ function onPlayerJoined(peerID) {
   if (!peerID) return;
   if ((diceGameRunning || diceGameSpectating) && gameHostID === myID && gameRoster.length) {
     sendSignal({
-      type:   "game_start",
-      from:   myID,
-      to:     peerID,
-      roomID: roomID,
-      roster: gameRoster,
-      kicked: Array.from(kickedSlots),
+      type:    "game_start",
+      from:    myID,
+      to:      peerID,
+      roomID:  roomID,
+      roster:  gameRoster,
+      kicked:  Array.from(kickedSlots),
+      variant: currentVariant,
     });
   }
 }
@@ -497,6 +686,10 @@ function _applyKick(slot, fromID) {
   if (slot < 0 || slot >= gameRoster.length) return;
   if (kickedSlots.has(slot)) return;          // already applied
   kickedSlots.add(slot);
+  // Persist the kick across rounds — the auto-roster builder consults
+  // kickedClientIDs so an AFK player stays out of the next New Game.
+  const clientID = gameRoster[slot];
+  if (clientID && clientID !== myID) kickedClientIDs.add(clientID);
   if (typeof window.diceGameKick === "function") {
     window.diceGameKick(slot);
   }
@@ -518,6 +711,23 @@ function _applyKick(slot, fromID) {
   const btn = document.getElementById("enable-shake-btn");
   const needsPermission =
     typeof window.DeviceMotionEvent.requestPermission === "function";
+
+  // Firefox Android intercepts shake gestures for its built-in AI page
+  // summary feature, so our DeviceMotion listener never fires.  There's no
+  // programmatic way for a page to opt out — the user has to disable the
+  // gesture in Firefox settings ("Shake to summarize") or use a different
+  // browser.  Surface a hint on the button so the user knows the on-screen
+  // Roll button is the working alternative on Firefox.
+  const isFirefox = /Firefox|FxiOS/i.test(navigator.userAgent || "");
+  if (isFirefox && btn) {
+    btn.textContent = "Shake-to-roll: blocked by Firefox — use Roll button";
+    btn.disabled = true;
+    btn.style.display = "inline-block";
+    btn.title =
+      "Firefox captures the shake gesture for its AI page-summary feature." +
+      " Use the on-screen Roll button instead, or disable Firefox's shake-to-summarise.";
+    return;
+  }
 
   // Shake-detection state. SHAKE_THRESHOLD is the L1 norm of the per-axis
   // acceleration delta between samples (m/s²-ish); SHAKE_DEBOUNCE caps to

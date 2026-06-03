@@ -15,9 +15,13 @@ func main() {
 	config := js.Global().Get("diceGameConfig")
 	numPlayers := config.Get("numPlayers").Int()
 	myPlayerIdx := config.Get("myPlayerIdx").Int()
+	gameType := ""
+	if v := config.Get("gameType"); v.Truthy() {
+		gameType = v.String()
+	}
 
 	// Create the game; wire the send callback through to JS.
-	g := game.NewMultiplayerPigGame(numPlayers, myPlayerIdx, func(jsonStr string) {
+	g := game.NewMultiplayerPigGame(numPlayers, myPlayerIdx, gameType, func(jsonStr string) {
 		// window.diceGameSendEvent is set by dice_game.js before WASM starts.
 		fn := js.Global().Get("diceGameSendEvent")
 		if fn.Truthy() {
@@ -72,11 +76,32 @@ func main() {
 		}
 	})
 
-	// Expose window.diceGameReset(numPlayers, myPlayerIdx) so a "New Game"
-	// click in JS restarts the game without reloading the WASM module.
+	// Bridge state changes so the host page can paint the DOM score / turn
+	// panel. The DOM panel is the source of truth for mobile fullscreen
+	// (where the canvas is hidden) and a redundancy on desktop.
+	g.SetStateChangeFn(func(jsonStr string) {
+		fn := js.Global().Get("diceGameOnStateChange")
+		if fn.Truthy() {
+			fn.Invoke(jsonStr)
+		}
+	})
+
+	// Expose window.diceGameGetState() for late binding — JS can poll once
+	// on mount if it missed the initial state-change emit.
+	js.Global().Set("diceGameGetState", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		return g.StateJSON()
+	}))
+
+	// Expose window.diceGameReset(numPlayers, myPlayerIdx, gameType?) so a
+	// "New Game" click in JS restarts the game without reloading the WASM
+	// module. The third argument is optional and selects the rules variant.
 	js.Global().Set("diceGameReset", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) >= 2 {
-			g.Reset(args[0].Int(), args[1].Int())
+			variant := ""
+			if len(args) >= 3 && args[2].Truthy() {
+				variant = args[2].String()
+			}
+			g.Reset(args[0].Int(), args[1].Int(), variant)
 		}
 		return nil
 	}))
