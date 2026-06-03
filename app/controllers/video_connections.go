@@ -202,13 +202,14 @@ type peersMessage struct {
 // signaling message format
 
 type signalMessage struct {
-	Type   string          `json:"type"`   // "offer","answer","candidate", etc.
+	Type   string          `json:"type"`   // "offer","answer","candidate","game_start","game_event"…
 	From   string          `json:"from"`   // sender userID
-	To     string          `json:"to"`     // target userID
+	To     string          `json:"to"`     // target userID or "room" (broadcast)
 	RoomID string          `json:"roomID"` // room scope
 	SDP    json.RawMessage `json:"sdp,omitempty"`
 	ICE    json.RawMessage `json:"ice,omitempty"`
-	// keep RawMessage so we just relay; client parses SDP/ICE
+	// keep RawMessage so we just relay; clients parse SDP/ICE/Event payloads
+	Event json.RawMessage `json:"event,omitempty"`
 }
 
 func VideoConnections(tm *TopicManager) http.HandlerFunc {
@@ -297,17 +298,31 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 					continue
 				}
 
-				// Basic validation: enforce room + IDs, ignore bad messages
-				if sig.RoomID != roomID || !validID(sig.To) || !validID(sig.From) {
+				// Basic validation: enforce room + sender ID.
+				// sig.To may be a specific userID or "room" (broadcast to all members).
+				if sig.RoomID != roomID || !validID(sig.From) {
+					continue
+				}
+				if sig.To != "room" && !validID(sig.To) {
 					continue
 				}
 
-				// Forward to specific peer in same room
-				targetTopic := roomID + ":" + sig.To
-				tm.control <- topicOperation{
-					opType:  "pub",
-					topic:   targetTopic,
-					message: message,
+				if sig.To == "room" {
+					// Broadcast to every other member of this room.
+					for _, memberID := range tm.getRoomMembers(roomID, sig.From) {
+						tm.control <- topicOperation{
+							opType:  "pub",
+							topic:   roomID + ":" + memberID,
+							message: message,
+						}
+					}
+				} else {
+					// Forward to a specific peer.
+					tm.control <- topicOperation{
+						opType:  "pub",
+						topic:   roomID + ":" + sig.To,
+						message: message,
+					}
 				}
 			}
 		}

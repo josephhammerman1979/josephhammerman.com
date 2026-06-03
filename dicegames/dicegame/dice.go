@@ -25,6 +25,8 @@ type Dice struct {
 	Size             float64
 	Selected         bool // Dice is kept between rounds
 	Locked           bool // Previously kepy dice cannot usually ne rethrown
+	Settling         bool // Brief pause after animation ends, before result is revealed
+	settlingTicks    int  // countdown frames for the settle delay
 }
 
 // NewDice creates a new Dice instance with default values.
@@ -32,13 +34,27 @@ func NewDice() *Dice {
 	return &Dice{Value: 1}
 }
 
-// StartRoll begins a dice rolling animation. "finalValue" is the value to end on.
+// StartRoll begins a dice rolling animation with a random final value.
 func (d *Dice) StartRoll() {
 	d.Animating = true
 	d.animationFrames = 90
 	d.faceChangeRate = 3
 	d.animationTick = 0
 	d.finalValue = rand.Intn(6) + 1
+	d.Settling = false
+	d.settlingTicks = 0
+}
+
+// StartRollWithFinal begins a dice rolling animation ending on a specific value.
+// Used for replaying another player's roll result on this client.
+func (d *Dice) StartRollWithFinal(finalValue int) {
+	d.Animating = true
+	d.animationFrames = 60
+	d.faceChangeRate = 3
+	d.animationTick = 0
+	d.finalValue = finalValue
+	d.Settling = false
+	d.settlingTicks = 0
 }
 
 func diceCollide(a, b *Dice) bool {
@@ -51,8 +67,18 @@ func diceCollide(a, b *Dice) bool {
 
 // Update advances the animation if necessary and ends with the final value.
 func (d *Dice) Update() {
-	if !d.Animating {
+	if !d.Animating && !d.Settling {
 		d.OffsetX, d.OffsetY = 0, 0
+		return
+	}
+
+	// Settling phase: brief hold after animation ends, before result is processed.
+	if d.Settling {
+		d.settlingTicks--
+		if d.settlingTicks <= 0 {
+			d.Settling = false
+			d.settlingTicks = 0
+		}
 		return
 	}
 
@@ -67,10 +93,12 @@ func (d *Dice) Update() {
 	// Advance animation tick
 	d.animationTick++
 
-	// End of animation
+	// End of animation — show final face, then enter settling pause
 	if d.animationTick >= d.animationFrames {
 		d.Value = d.finalValue
 		d.Animating = false
+		d.Settling = true
+		d.settlingTicks = 50 // ~0.83 seconds at 60 fps
 		d.OffsetX, d.OffsetY = 0, 0
 	}
 }
@@ -138,6 +166,8 @@ type DicePool struct {
 	Released                               bool         // Have dice "landed"?
 	Kept                                   map[int]bool // Which dice are kept for next roll
 	DiceSize                               float64
+	settling                               bool // brief pause after all dice land
+	settlingTicks                          int  // countdown for settle delay
 }
 
 func NewDicePool(count int, cupX, cupY, playMinX, playMinY, playMaxX, playMaxY float64) *DicePool {
@@ -189,6 +219,16 @@ func (pool *DicePool) StartRoll() {
 
 func (pool *DicePool) Update() {
 	if !pool.Rolling {
+		return
+	}
+
+	// Settling phase: all dice have landed; wait before revealing results.
+	if pool.settling {
+		pool.settlingTicks--
+		if pool.settlingTicks <= 0 {
+			pool.Rolling = false
+			pool.settling = false
+		}
 		return
 	}
 
@@ -244,7 +284,8 @@ func (pool *DicePool) Update() {
 	}
 
 	if allDone {
-		pool.Rolling = false
+		pool.settling = true
+		pool.settlingTicks = 50
 	}
 }
 

@@ -1,11 +1,15 @@
 {{ template "base" . }}
 {{ define "head" }}<style>
+/* ── Video room layout ─────────────────────────────── */
 #video-room-header {
-  grid-column: 2;
+  grid-column: 1 / 4;
   display: flex;
   align-items: center;
   gap: 1rem;
-  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  background: #1a1a2e;
+  border-bottom: 1px solid #2e2e50;
+  flex-wrap: wrap;
 }
 
 #video-root {
@@ -28,13 +32,124 @@
   aspect-ratio: 16 / 9;
   object-fit: cover;
   background: #000;
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.6);
+}
+
+.room-badge {
+  font-family: monospace;
+  background: #2a2a50;
+  color: #a0a0ff;
+  padding: 0.2em 0.6em;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+#copy-link-btn {
+  background: #3a3a70;
+  color: #c8c8ff;
+  border: 1px solid #5050a0;
+  padding: 0.35em 0.9em;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background 0.15s;
+}
+#copy-link-btn:hover { background: #4a4a90; }
+
+/* ── Game panel ────────────────────────────────────── */
+#game-panel {
+  grid-column: 1 / 4;
+  padding: 1rem;
+  box-sizing: border-box;
+  border-top: 2px solid #2e2e50;
+  background: #12121f;
+}
+
+#game-panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  color: #9090cc;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#game-header-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+#start-game-btn {
+  background: linear-gradient(135deg, #4a2080 0%, #6a40b0 100%);
+  color: #fff;
+  border: none;
+  padding: 0.55em 1.3em;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  box-shadow: 0 3px 10px rgba(80,30,160,0.5);
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+#start-game-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(80,30,160,0.7);
+}
+#start-game-btn:active { transform: translateY(0); }
+
+#game-status {
+  color: #8888bb;
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+#game-player-list {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.game-player-chip {
+  background: #2a2a50;
+  color: #a0a0cc;
+  border: 1px solid #404080;
+  padding: 0.2em 0.65em;
+  border-radius: 20px;
+  font-size: 0.82em;
+}
+.game-player-chip.me {
+  background: #3a2070;
+  color: #c8a0ff;
+  border-color: #7040c0;
+}
+
+#game-container {
+  margin-top: 0.75rem;
+}
+
+/* Responsive canvas — Ebiten sets the logical size; CSS scales it. */
+#defaultCanvas0 {
+  display: block;
+  max-width: 800px;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(60,20,120,0.7);
+  border: 2px solid #4a2090;
 }
 </style>{{ end }}
+
 {{ define "main" }}
 <div id="video-room-header">
-  <span>Room: <code>{{ .RoomID }}</code></span>
+  <span>Room: <span class="room-badge">{{ .RoomID }}</span></span>
   <button id="copy-link-btn">Copy Invite Link</button>
 </div>
+
 <div id="video-root" data-room-id="{{ .RoomID }}">
   <div id="video-grid">
     <video id="local_video" autoplay controls muted playsinline></video>
@@ -42,5 +157,20 @@
   </div>
 </div>
 
+<!-- ── Dice Game Panel ──────────────────────────────── -->
+<div id="game-panel">
+  <h2>&#127922; Dice Game</h2>
+  <div id="game-header-row">
+    <button id="start-game-btn" onclick="startDiceGame()">Start Pig Dice Game</button>
+    <span id="game-status"></span>
+    <div id="game-player-list"></div>
+  </div>
+  <div id="game-container" style="display:none;">
+    <canvas id="defaultCanvas0"></canvas>
+  </div>
+</div>
+
+<script src="/js/wasm_exec.js"></script>
 <script type="text/javascript" src="/js/video.js"></script>
+<script type="text/javascript" src="/js/dice_game.js"></script>
 {{ end }}

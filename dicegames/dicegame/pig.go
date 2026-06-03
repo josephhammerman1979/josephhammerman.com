@@ -99,7 +99,7 @@ func (g *PigGame) Update() error {
 
 	g.Die.Update()
 
-	if !g.Die.Animating && g.Die.animationTick > 0 {
+	if !g.Die.Animating && !g.Die.Settling && g.Die.animationTick > 0 {
 		g.ProcessRollResult()
 		g.Die.animationTick = 0 // Reset animation tick so result isn't re-processed
 		return nil

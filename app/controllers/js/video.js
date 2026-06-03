@@ -57,6 +57,14 @@ ws.onmessage = (evt) => {
     return;
   }
 
+  // Dice game coordination messages (broadcast or direct).
+  if (msg.type === "game_start" || msg.type === "game_event") {
+    if (typeof handleDiceGameMessage === "function") {
+      handleDiceGameMessage(msg);
+    }
+    return;
+  }
+
   if (msg.to !== myID) return;
   const from = msg.from;
   if (!from || from === myID) return;
