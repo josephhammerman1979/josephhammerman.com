@@ -3,11 +3,11 @@ DICE_DIR   := $(REPO_ROOT)/dicegames
 WASM_OUT   := $(REPO_ROOT)/app/wasm/pig.wasm
 JS_OUT_DIR := $(REPO_ROOT)/app/controllers/js
 WASM_EXEC  := $(JS_OUT_DIR)/wasm_exec.js
+WASM_EXEC_SRC := $(REPO_ROOT)/third_party/wasm/wasm_exec.js
 SERVER_BIN := $(REPO_ROOT)/josephhammerman.com
-GOROOT     := $(shell go env GOROOT)
 DICE_SRC   := $(shell find $(DICE_DIR) -type f -name '*.go')
 
-.PHONY: all wasm build run clean
+.PHONY: all wasm build run clean vendor-wasm-exec
 
 all: build
 
@@ -18,24 +18,10 @@ $(WASM_OUT): $(DICE_SRC)
 	@echo "==> Building pig.wasm"
 	cd $(DICE_DIR) && GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o $@ .
 
-$(WASM_EXEC):
+$(WASM_EXEC): $(WASM_EXEC_SRC)
 	@mkdir -p $(JS_OUT_DIR)
-	@echo "==> Locating wasm_exec.js under $(GOROOT)"
-	@src=""; \
-	for cand in "$(GOROOT)/lib/wasm/wasm_exec.js" "$(GOROOT)/misc/wasm/wasm_exec.js"; do \
-	  if [ -f "$$cand" ]; then src="$$cand"; break; fi; \
-	done; \
-	if [ -z "$$src" ]; then \
-	  src=$$(find "$(GOROOT)" -type f -name wasm_exec.js 2>/dev/null | head -n1); \
-	fi; \
-	if [ -z "$$src" ]; then \
-	  echo "ERROR: cannot find wasm_exec.js under $(GOROOT)." >&2; \
-	  echo "       On Debian/Ubuntu, install the matching source package, e.g.:" >&2; \
-	  echo "           sudo apt-get install golang-1.24-src" >&2; \
-	  exit 1; \
-	fi; \
-	cp "$$src" "$@"; \
-	echo "    $$src -> $@"
+	@echo "==> Copying vendored wasm_exec.js"
+	@cp "$(WASM_EXEC_SRC)" "$@"
 
 build: wasm $(SERVER_BIN)
 
@@ -49,3 +35,26 @@ run: build
 
 clean:
 	rm -f $(WASM_OUT) $(WASM_EXEC) $(SERVER_BIN)
+
+# Refresh the vendored wasm_exec.js from the local Go toolchain.
+# Run this after upgrading Go (e.g. 1.24 -> 1.25), then commit the result.
+vendor-wasm-exec:
+	@goroot=$$(go env GOROOT); \
+	src="$$goroot/lib/wasm/wasm_exec.js"; \
+	if [ ! -f "$$src" ]; then src="$$goroot/misc/wasm/wasm_exec.js"; fi; \
+	if [ ! -f "$$src" ]; then \
+	  src=$$(find "$$goroot" -type f -name wasm_exec.js 2>/dev/null | head -n1); \
+	fi; \
+	if [ -z "$$src" ] || [ ! -f "$$src" ]; then \
+	  echo "ERROR: cannot find wasm_exec.js under $$goroot." >&2; \
+	  echo "       Install the Go source package for your distro and retry." >&2; \
+	  exit 1; \
+	fi; \
+	mkdir -p $(dir $(WASM_EXEC_SRC)); \
+	if cmp -s "$$src" "$(WASM_EXEC_SRC)"; then \
+	  echo "==> $(WASM_EXEC_SRC) already up to date ($$(go version))"; \
+	else \
+	  cp "$$src" "$(WASM_EXEC_SRC)"; \
+	  echo "==> Updated $(WASM_EXEC_SRC) from $$src ($$(go version))"; \
+	  echo "    Don't forget to commit the change."; \
+	fi
