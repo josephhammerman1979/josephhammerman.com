@@ -33,6 +33,13 @@ func main() {
 		return nil
 	}))
 
+	// Expose window.diceGameRoll so dice_game.js can request a roll from
+	// non-keyboard input (e.g. a phone shake gesture).
+	js.Global().Set("diceGameRoll", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		g.RequestRoll()
+		return nil
+	}))
+
 	ebiten.SetWindowSize(game.ScreenWidth, game.ScreenHeight)
 	ebiten.SetWindowTitle("Pig Dice — Multiplayer")
 

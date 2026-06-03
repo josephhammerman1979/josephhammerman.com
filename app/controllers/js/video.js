@@ -186,4 +186,11 @@ navigator.mediaDevices
     pendingPeers.clear();
     return localVideo.play();
   })
-  .catch((err) => console.error("Error getting user media", err));
+  .catch((err) => console.error("Error getting user media", err))
+  .finally(() => {
+    // Dice rooms (created via "Create Dice Room") auto-start the game.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("game") === "dice" && typeof startDiceGame === "function") {
+      startDiceGame();
+    }
+  });

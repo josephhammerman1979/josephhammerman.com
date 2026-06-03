@@ -35,10 +35,18 @@ type MultiplayerPigGame struct {
 	inputCooldown int
 	Die           *Dice
 
-	myPlayerIdx  int
-	sendEventFn  func(string) // relay game event JSON to peers
-	pendingEvent *GameEvent   // received from network, applied on next Update
-	localRolling bool         // waiting for local animation + settle to finish
+	myPlayerIdx   int
+	sendEventFn   func(string) // relay game event JSON to peers
+	pendingEvent  *GameEvent   // received from network, applied on next Update
+	localRolling  bool         // waiting for local animation + settle to finish
+	rollRequested bool         // set by external input (e.g. phone shake)
+}
+
+// RequestRoll asks the game to roll on the next Update, as if the local
+// player had pressed SPACE. Ignored unless it is the local player's turn
+// and the die is idle.
+func (g *MultiplayerPigGame) RequestRoll() {
+	g.rollRequested = true
 }
 
 func NewMultiplayerPigGame(numPlayers, myPlayerIdx int, sendEventFn func(string)) *MultiplayerPigGame {
@@ -182,6 +190,8 @@ func (g *MultiplayerPigGame) Update() error {
 	// Only accept input when it is our turn and the die is idle.
 	if g.CurrentIndex != g.myPlayerIdx ||
 		g.Die.Animating || g.Die.Settling || g.localRolling {
+		// Drop any stale shake-roll request: it should only apply on our turn.
+		g.rollRequested = false
 		return nil
 	}
 
@@ -190,7 +200,8 @@ func (g *MultiplayerPigGame) Update() error {
 		return nil
 	}
 
-	if ebiten.IsKeyPressed(ebiten.KeySpace) {
+	if ebiten.IsKeyPressed(ebiten.KeySpace) || g.rollRequested {
+		g.rollRequested = false
 		g.Die.StartRoll()
 		g.localRolling = true
 		g.Message = "Rolling..."

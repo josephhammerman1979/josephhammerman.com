@@ -133,3 +133,79 @@ function _updateGamePlayerList(players, myPlayerIdx) {
     return `<span class="game-player-chip${isMe ? " me" : ""}">${label}</span>`;
   }).join("");
 }
+
+// ── Shake-to-roll ────────────────────────────────────────────────────────────
+//
+// On phones we expose a "shake the device" gesture as an alternative to
+// pressing SPACE. The Go wasm exposes window.diceGameRoll() once the game is
+// running; we call that on each detected shake. iOS requires an explicit
+// permission grant triggered from a user gesture, so we show an enable
+// button when DeviceMotionEvent is supported.
+
+(function setupShakeToRoll() {
+  // No DeviceMotionEvent? (most desktops) → nothing to do.
+  if (typeof window.DeviceMotionEvent === "undefined") return;
+
+  const btn = document.getElementById("enable-shake-btn");
+  if (!btn) return;
+  btn.style.display = "inline-block";
+
+  // Shake-detection state. Tunable: SHAKE_THRESHOLD measures the L1 norm of
+  // the per-axis acceleration delta between samples (m/s²-ish). SHAKE_DEBOUNCE
+  // throttles to roughly one roll per second.
+  const SHAKE_THRESHOLD = 25;
+  const SHAKE_DEBOUNCE_MS = 900;
+  let last = { x: 0, y: 0, z: 0, t: 0 };
+  let lastShakeAt = 0;
+  let enabled = false;
+
+  function onMotion(evt) {
+    const a = evt.accelerationIncludingGravity;
+    if (!a) return;
+    const now = Date.now();
+    if (last.t === 0) {
+      last = { x: a.x || 0, y: a.y || 0, z: a.z || 0, t: now };
+      return;
+    }
+    const dt = now - last.t;
+    if (dt < 80) return; // ~12 samples/s is plenty
+    const delta =
+      Math.abs((a.x || 0) - last.x) +
+      Math.abs((a.y || 0) - last.y) +
+      Math.abs((a.z || 0) - last.z);
+    last = { x: a.x || 0, y: a.y || 0, z: a.z || 0, t: now };
+
+    if (delta > SHAKE_THRESHOLD && now - lastShakeAt > SHAKE_DEBOUNCE_MS) {
+      lastShakeAt = now;
+      if (typeof window.diceGameRoll === "function") {
+        window.diceGameRoll();
+      }
+    }
+  }
+
+  function enable() {
+    if (enabled) return;
+    window.addEventListener("devicemotion", onMotion);
+    enabled = true;
+    btn.textContent = "Shake-to-roll: ON";
+    btn.disabled = true;
+  }
+
+  btn.addEventListener("click", () => {
+    // iOS 13+ gates DeviceMotion behind a permission prompt.
+    const reqPerm = window.DeviceMotionEvent.requestPermission;
+    if (typeof reqPerm === "function") {
+      reqPerm()
+        .then((state) => {
+          if (state === "granted") enable();
+          else btn.textContent = "Shake-to-roll: denied";
+        })
+        .catch((err) => {
+          console.error("[DiceGame] motion permission error:", err);
+          btn.textContent = "Shake-to-roll: error";
+        });
+    } else {
+      enable();
+    }
+  });
+})();

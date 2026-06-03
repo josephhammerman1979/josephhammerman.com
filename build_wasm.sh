@@ -22,13 +22,19 @@ echo "    pig.wasm -> $WASM_OUT_DIR/pig.wasm"
 
 echo "==> Copying wasm_exec.js from Go toolchain …"
 GOROOT="$(go env GOROOT)"
-WASM_EXEC_SRC="$GOROOT/misc/wasm/wasm_exec.js"
-if [ ! -f "$WASM_EXEC_SRC" ]; then
-  # Go 1.24+ moved it
-  WASM_EXEC_SRC="$GOROOT/lib/wasm/wasm_exec.js"
+WASM_EXEC_SRC=""
+for cand in "$GOROOT/lib/wasm/wasm_exec.js" "$GOROOT/misc/wasm/wasm_exec.js"; do
+  if [ -f "$cand" ]; then WASM_EXEC_SRC="$cand"; break; fi
+done
+if [ -z "$WASM_EXEC_SRC" ]; then
+  # Some distro packages (e.g. Debian/Ubuntu golang-1.24-go) ship the binaries
+  # but not the wasm support files; search the full GOROOT as a fallback.
+  WASM_EXEC_SRC="$(find "$GOROOT" -type f -name wasm_exec.js 2>/dev/null | head -n1)"
 fi
-if [ ! -f "$WASM_EXEC_SRC" ]; then
+if [ -z "$WASM_EXEC_SRC" ] || [ ! -f "$WASM_EXEC_SRC" ]; then
   echo "ERROR: cannot find wasm_exec.js under $GOROOT" >&2
+  echo "       On Debian/Ubuntu, install the matching source package, e.g.:" >&2
+  echo "           sudo apt-get install golang-1.24-src" >&2
   exit 1
 fi
 cp "$WASM_EXEC_SRC" "$JS_OUT_DIR/wasm_exec.js"

@@ -102,6 +102,23 @@
 }
 #start-game-btn:active { transform: translateY(0); }
 
+#enable-shake-btn {
+  display: none;
+  background: #2a2a50;
+  color: #c0c0ff;
+  border: 1px solid #5050a0;
+  padding: 0.45em 1em;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+#enable-shake-btn:disabled {
+  background: #20402a;
+  color: #80d090;
+  border-color: #408060;
+  cursor: default;
+}
+
 #game-status {
   color: #8888bb;
   font-size: 0.9em;
@@ -162,6 +179,7 @@
   <h2>&#127922; Dice Game</h2>
   <div id="game-header-row">
     <button id="start-game-btn" onclick="startDiceGame()">Start Pig Dice Game</button>
+    <button id="enable-shake-btn" type="button">Enable Shake-to-Roll</button>
     <span id="game-status"></span>
     <div id="game-player-list"></div>
   </div>
