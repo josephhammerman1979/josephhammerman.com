@@ -8,14 +8,40 @@ function randomID() {
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
-const myID = randomID();
+
+// Stable client ID, persisted across reloads so the server can restore the
+// player's slot on refresh/rejoin.
+const CLIENT_ID_STORAGE_KEY = "pig.clientID";
+function getOrCreateClientID() {
+  let id = null;
+  try { id = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY); } catch (_) {}
+  if (!id || !/^[a-f0-9]{16}$/.test(id)) {
+    id = randomID();
+    try { window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, id); } catch (_) {}
+  }
+  return id;
+}
+const myID = getOrCreateClientID();
 const peers = Object.create(null);
 const pendingPeers = new Set();
+
+// Server-assigned slot info, populated from the "peers" and "player_joined"
+// messages. Read by dice_game.js to determine player ordering.
+let mySlot = -1;
+const playerSlots = Object.create(null);  // clientID -> slot index
 const wsScheme = window.location.protocol === "https:" ? "wss://" : "ws://";
-const ws = new WebSocket(
-  wsScheme + window.location.host + "/rooms/" + encodeURIComponent(roomID) + "/ws?userID=" + encodeURIComponent(myID)
-);
+const wsURL = wsScheme + window.location.host + "/rooms/" + encodeURIComponent(roomID) + "/ws?userID=" + encodeURIComponent(myID);
+
+let ws = null;
 let localStream = null;
+
+// Auto-reconnect state. The server preserves slot assignments across
+// disconnect, so a reconnect restores the same player number.
+const RECONNECT_MIN_MS = 500;
+const RECONNECT_MAX_MS = 10000;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let manualClose = false;
 
 // Copy invite link to clipboard
 document.getElementById("copy-link-btn").addEventListener("click", () => {
@@ -27,6 +53,49 @@ document.getElementById("copy-link-btn").addEventListener("click", () => {
   });
 });
 
+// SMS invite. On mobile we prefer the native share sheet (Web Share API)
+// which lets the user pick Messages, WhatsApp, etc. without us hard-coding
+// the sms: protocol — that one has been flaky across iOS Safari versions
+// and Android Chrome (and pops a confirmation that the user has to accept,
+// which is what got removed here). On desktop / unsupported browsers we
+// fall back to navigator.clipboard.writeText with a brief "Copied!" hint
+// so the user can paste into whichever app they prefer.
+(function setupShareButtons() {
+  const smsBtn = document.getElementById("share-sms-btn");
+  if (!smsBtn) return;
+
+  const flash = (msg, ms = 1600) => {
+    const original = smsBtn.textContent;
+    smsBtn.textContent = msg;
+    setTimeout(() => { smsBtn.textContent = original; }, ms);
+  };
+
+  smsBtn.addEventListener("click", async () => {
+    const url  = window.location.href;
+    const text = "Join me in this room: " + url;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Join my room", text, url });
+        return;
+      } catch (err) {
+        // User cancelled or share failed — fall through to clipboard.
+        if (err && err.name === "AbortError") return;
+      }
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        flash("Copied to clipboard");
+        return;
+      } catch (_) { /* fall through */ }
+    }
+
+    flash("Share unavailable");
+  });
+})();
+
 // Resize all videos based on how many are present
 function updateLayout() {
   const grid = document.getElementById("video-grid");
@@ -35,16 +104,40 @@ function updateLayout() {
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 }
 
-ws.onopen = () => {
-  console.log("WS connected, myID =", myID, "roomID =", roomID);
-};
+function connectWS() {
+  ws = new WebSocket(wsURL);
+  ws.onopen = onWSOpen;
+  ws.onmessage = onWSMessage;
+  ws.onclose = onWSClose;
+  ws.onerror = (err) => console.error("[WS] error:", err);
+}
 
-ws.onmessage = (evt) => {
+function scheduleReconnect() {
+  if (manualClose || reconnectTimer) return;
+  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * Math.pow(2, reconnectAttempts));
+  reconnectAttempts++;
+  console.log(`[WS] reconnect in ${delay}ms (attempt ${reconnectAttempts})`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectWS();
+  }, delay);
+}
+
+function onWSOpen() {
+  console.log("WS connected, myID =", myID, "roomID =", roomID);
+  reconnectAttempts = 0;
+}
+
+function onWSMessage(evt) {
   const msg = JSON.parse(evt.data);
   if (!msg || msg.roomID !== roomID) return;
 
-  // Server-initiated notification of existing room members.
+  // Server-initiated notification of existing room members + slot assignments.
   if (msg.type === "peers") {
+    if (typeof msg.mySlot === "number") mySlot = msg.mySlot;
+    if (msg.slots && typeof msg.slots === "object") {
+      Object.keys(msg.slots).forEach((id) => { playerSlots[id] = msg.slots[id]; });
+    }
     msg.peers.forEach((peerID) => {
       if (peerID === myID || peers[peerID]) return;
       if (localStream) {
@@ -54,6 +147,46 @@ ws.onmessage = (evt) => {
         pendingPeers.add(peerID);
       }
     });
+    if (typeof onSlotsUpdated === "function") onSlotsUpdated();
+    return;
+  }
+
+  // Server tells us a new player joined and what slot they got. If we still
+  // have a stale RTCPeerConnection for this peer (e.g. they refreshed before
+  // our ICE timeout fired), tear it down so the fresh offer creates a new one.
+  if (msg.type === "player_joined") {
+    if (msg.peerID && typeof msg.slot === "number") {
+      playerSlots[msg.peerID] = msg.slot;
+      if (peers[msg.peerID]) {
+        peers[msg.peerID].close();
+        delete peers[msg.peerID];
+        removePeerVideo(msg.peerID);
+      }
+      if (typeof onSlotsUpdated === "function") onSlotsUpdated();
+      if (typeof onPlayerJoined === "function") onPlayerJoined(msg.peerID);
+    }
+    return;
+  }
+
+  // Server tells us a peer disconnected. Tear down the RTC connection and
+  // notify the dice game so it can end any in-progress session cleanly.
+  if (msg.type === "player_left") {
+    if (msg.peerID) {
+      if (peers[msg.peerID]) {
+        peers[msg.peerID].close();
+        delete peers[msg.peerID];
+      }
+      removePeerVideo(msg.peerID);
+      if (typeof onPlayerLeft === "function") onPlayerLeft(msg.peerID);
+    }
+    return;
+  }
+
+  // Dice game coordination messages (broadcast or direct).
+  if (msg.type === "game_start" || msg.type === "game_event" || msg.type === "player_kick") {
+    if (typeof handleDiceGameMessage === "function") {
+      handleDiceGameMessage(msg);
+    }
     return;
   }
 
@@ -88,15 +221,31 @@ ws.onmessage = (evt) => {
       }
       break;
   }
-};
+}
 
-ws.onclose = () => {
+function onWSClose() {
   console.log("WS closed");
-  Object.values(peers).forEach((pc) => pc.close());
-};
+  // Drop all peer state — a fresh "peers" message on reconnect will rebuild
+  // the WebRTC mesh from scratch.
+  Object.keys(peers).forEach((peerID) => {
+    peers[peerID].close();
+    delete peers[peerID];
+    removePeerVideo(peerID);
+  });
+  pendingPeers.clear();
+  mySlot = -1;
+  Object.keys(playerSlots).forEach((id) => { delete playerSlots[id]; });
+  if (typeof onWSDisconnected === "function") onWSDisconnected();
+  scheduleReconnect();
+}
+
+window.addEventListener("beforeunload", () => {
+  manualClose = true;
+  if (ws) ws.close();
+});
 
 function sendSignal(payload) {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
   }
 }
@@ -162,6 +311,8 @@ function createPeerConnection(peerID) {
   return pc;
 }
 
+connectWS();
+
 navigator.mediaDevices
   .getUserMedia({ video: true, audio: true })
   .then((stream) => {
@@ -179,3 +330,8 @@ navigator.mediaDevices
     return localVideo.play();
   })
   .catch((err) => console.error("Error getting user media", err));
+// Note: Dice rooms used to auto-start the game on entry (when the URL had
+// ?game=dice) but that fired before any peers had joined, leaving the
+// first player rolling against no one. The game now starts only when the
+// user explicitly clicks Start Game, by which time they've had a chance
+// to share the invite link and wait for peers.

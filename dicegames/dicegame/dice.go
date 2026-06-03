@@ -25,6 +25,30 @@ type Dice struct {
 	Size             float64
 	Selected         bool // Dice is kept between rounds
 	Locked           bool // Previously kepy dice cannot usually ne rethrown
+	Settling         bool // Brief pause after animation ends, before result is revealed
+	settlingTicks    int  // countdown frames for the settle delay
+
+	// Solo-bounce animation. When SetBounceArea has been called, StartRoll
+	// launches the die from (HomeX, HomeY) with a random velocity and the
+	// die bounces off the (BounceMinX..MaxX, BounceMinY..MaxY) rectangle
+	// during Animating. At the end of the animation the die snaps back to
+	// (HomeX, HomeY) for a clean settle. Independent of DicePool's multi-
+	// dice physics — DicePool dice leave bounceConfigured = false.
+	bounceConfigured                                bool
+	HomeX, HomeY                                    float64
+	BounceMinX, BounceMinY, BounceMaxX, BounceMaxY  float64
+}
+
+// SetBounceArea enables the solo-bounce animation and pins the die's home
+// position + the rectangle it bounces inside. Call once per die after
+// construction; subsequent rolls reuse the same area.
+func (d *Dice) SetBounceArea(homeX, homeY, minX, minY, maxX, maxY float64) {
+	d.bounceConfigured = true
+	d.HomeX, d.HomeY = homeX, homeY
+	d.BounceMinX, d.BounceMinY = minX, minY
+	d.BounceMaxX, d.BounceMaxY = maxX, maxY
+	d.X, d.Y = homeX, homeY
+	d.VX, d.VY = 0, 0
 }
 
 // NewDice creates a new Dice instance with default values.
@@ -32,13 +56,50 @@ func NewDice() *Dice {
 	return &Dice{Value: 1}
 }
 
-// StartRoll begins a dice rolling animation. "finalValue" is the value to end on.
+// StartRoll begins a dice rolling animation with a random final value.
 func (d *Dice) StartRoll() {
 	d.Animating = true
 	d.animationFrames = 90
 	d.faceChangeRate = 3
 	d.animationTick = 0
 	d.finalValue = rand.Intn(6) + 1
+	d.Settling = false
+	d.settlingTicks = 0
+	d.kickoffSoloBounce()
+}
+
+// StartRollWithFinal begins a dice rolling animation ending on a specific value.
+// Used for replaying another player's roll result on this client.
+func (d *Dice) StartRollWithFinal(finalValue int) {
+	d.Animating = true
+	d.animationFrames = 60
+	d.faceChangeRate = 3
+	d.animationTick = 0
+	d.finalValue = finalValue
+	d.Settling = false
+	d.settlingTicks = 0
+	d.kickoffSoloBounce()
+}
+
+// kickoffSoloBounce launches the die from its home position with a random
+// horizontal+upward velocity if SetBounceArea has been configured. No-op
+// otherwise — DicePool-managed dice keep their externally-set position.
+func (d *Dice) kickoffSoloBounce() {
+	if !d.bounceConfigured {
+		return
+	}
+	d.X = d.HomeX
+	d.Y = d.HomeY
+	// Strong sideways throw with a slight upward bias, so the die appears
+	// to pop out of its resting place and tumble across the play area.
+	speed := 6.0 + rand.Float64()*4.0
+	angle := (rand.Float64()*2 - 1) * (math.Pi / 3) // ±60° from horizontal
+	dir := 1.0
+	if rand.Float64() < 0.5 {
+		dir = -1.0
+	}
+	d.VX = math.Cos(angle) * speed * dir
+	d.VY = -4.0 - rand.Float64()*4.0
 }
 
 func diceCollide(a, b *Dice) bool {
@@ -51,8 +112,18 @@ func diceCollide(a, b *Dice) bool {
 
 // Update advances the animation if necessary and ends with the final value.
 func (d *Dice) Update() {
-	if !d.Animating {
+	if !d.Animating && !d.Settling {
 		d.OffsetX, d.OffsetY = 0, 0
+		return
+	}
+
+	// Settling phase: brief hold after animation ends, before result is processed.
+	if d.Settling {
+		d.settlingTicks--
+		if d.settlingTicks <= 0 {
+			d.Settling = false
+			d.settlingTicks = 0
+		}
 		return
 	}
 
@@ -61,17 +132,64 @@ func (d *Dice) Update() {
 		d.Value = rand.Intn(6) + 1
 	}
 
-	// Apply rattling effect during animation
-	d.OffsetX, d.OffsetY = 0, 0
+	// Solo-bounce physics: advance position under gravity and bounce off
+	// the configured rectangle. The die is treated as a square of side
+	// d.Size for the wall-collision check (falls back to 100 if Size
+	// isn't set so the wall checks aren't degenerate).
+	if d.bounceConfigured {
+		d.X += d.VX
+		d.Y += d.VY
+		d.VY += 0.35 // gravity (px/frame²)
+		d.VX *= 0.992
+		d.VY *= 0.992
+		size := d.Size
+		if size <= 0 {
+			size = 100
+		}
+		if d.X < d.BounceMinX {
+			d.X = d.BounceMinX
+			d.VX = math.Abs(d.VX) * 0.7
+		}
+		if d.X+size > d.BounceMaxX {
+			d.X = d.BounceMaxX - size
+			d.VX = -math.Abs(d.VX) * 0.7
+		}
+		if d.Y < d.BounceMinY {
+			d.Y = d.BounceMinY
+			d.VY = math.Abs(d.VY) * 0.7
+		}
+		if d.Y+size > d.BounceMaxY {
+			d.Y = d.BounceMaxY - size
+			d.VY = -math.Abs(d.VY) * 0.5 // bigger damping on floor
+		}
+	}
+
+	// Per-frame jiggle so the die looks lively even when physics is off
+	// (e.g. for the canvas-disabled / DOM-only path). Subtle: ±3 px max.
+	if !d.bounceConfigured {
+		d.OffsetX = rand.Intn(7) - 3
+		d.OffsetY = rand.Intn(7) - 3
+	} else {
+		d.OffsetX, d.OffsetY = 0, 0
+	}
 
 	// Advance animation tick
 	d.animationTick++
 
-	// End of animation
+	// End of animation — show final face, then enter settling pause
 	if d.animationTick >= d.animationFrames {
 		d.Value = d.finalValue
 		d.Animating = false
+		d.Settling = true
+		d.settlingTicks = 50 // ~0.83 seconds at 60 fps
 		d.OffsetX, d.OffsetY = 0, 0
+		// Snap back to the home position so the final face renders cleanly
+		// inside the bordered play area instead of wherever the physics
+		// happened to leave it.
+		if d.bounceConfigured {
+			d.X, d.Y = d.HomeX, d.HomeY
+			d.VX, d.VY = 0, 0
+		}
 	}
 }
 
@@ -138,6 +256,8 @@ type DicePool struct {
 	Released                               bool         // Have dice "landed"?
 	Kept                                   map[int]bool // Which dice are kept for next roll
 	DiceSize                               float64
+	settling                               bool // brief pause after all dice land
+	settlingTicks                          int  // countdown for settle delay
 }
 
 func NewDicePool(count int, cupX, cupY, playMinX, playMinY, playMaxX, playMaxY float64) *DicePool {
@@ -189,6 +309,16 @@ func (pool *DicePool) StartRoll() {
 
 func (pool *DicePool) Update() {
 	if !pool.Rolling {
+		return
+	}
+
+	// Settling phase: all dice have landed; wait before revealing results.
+	if pool.settling {
+		pool.settlingTicks--
+		if pool.settlingTicks <= 0 {
+			pool.Rolling = false
+			pool.settling = false
+		}
 		return
 	}
 
@@ -244,7 +374,8 @@ func (pool *DicePool) Update() {
 	}
 
 	if allDone {
-		pool.Rolling = false
+		pool.settling = true
+		pool.settlingTicks = 50
 	}
 }
 

@@ -10,6 +10,8 @@ func Router(tm *TopicManager) *mux.Router {
 	r := mux.NewRouter()
 	r.PathPrefix("/css/").Handler(http.FileServer(http.FS(ffs)))
 	r.PathPrefix("/js/").Handler(http.FileServer(http.FS(ffs)))
+	// WASM builds are large — serve from the filesystem, not embedded in the binary.
+	r.PathPrefix("/wasm/").Handler(http.StripPrefix("/wasm/", http.FileServer(http.Dir("./app/wasm/"))))
 
 	r.HandleFunc("/home/", Home).Methods(http.MethodGet)
 	r.HandleFunc("/", Index).Methods(http.MethodGet)

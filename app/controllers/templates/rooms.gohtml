@@ -4,9 +4,17 @@
 <div class="section-div">
   <h1>Create or Join a Room</h1>
 
-  <form action="/rooms" method="post" style="margin-bottom: 1rem;">
-    <button type="submit">Create New Room</button>
-  </form>
+  <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem;">
+    <form action="/rooms" method="post">
+      <input type="hidden" name="type" value="video" />
+      <button type="submit">Create Video Room</button>
+    </form>
+
+    <form action="/rooms" method="post">
+      <input type="hidden" name="type" value="dice" />
+      <button type="submit">Create Dice Room</button>
+    </form>
+  </div>
 
   <form action="/rooms/{{.RoomID}}" method="get">
     <label for="room-id">Join room by code:</label>

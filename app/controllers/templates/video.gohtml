@@ -1,11 +1,15 @@
 {{ template "base" . }}
 {{ define "head" }}<style>
+/* ── Video room layout ─────────────────────────────── */
 #video-room-header {
-  grid-column: 2;
+  grid-column: 1 / 4;
   display: flex;
   align-items: center;
   gap: 1rem;
-  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  background: #1a1a2e;
+  border-bottom: 1px solid #2e2e50;
+  flex-wrap: wrap;
 }
 
 #video-root {
@@ -28,13 +32,486 @@
   aspect-ratio: 16 / 9;
   object-fit: cover;
   background: #000;
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.6);
 }
+
+.room-badge {
+  font-family: monospace;
+  background: #2a2a50;
+  color: #a0a0ff;
+  padding: 0.2em 0.6em;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+#copy-link-btn,
+.share-link-btn {
+  background: #3a3a70;
+  color: #c8c8ff;
+  border: 1px solid #5050a0;
+  padding: 0.35em 0.9em;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background 0.15s;
+  text-decoration: none;
+  display: inline-block;
+}
+#copy-link-btn:hover,
+.share-link-btn:hover { background: #4a4a90; }
+
+/* ── Game panel ────────────────────────────────────── */
+#game-panel {
+  grid-column: 1 / 4;
+  padding: 1rem;
+  box-sizing: border-box;
+  border-top: 2px solid #2e2e50;
+  background: #12121f;
+}
+
+#game-panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  color: #9090cc;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#game-header-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+#start-game-btn,
+#new-game-btn,
+#enter-fullscreen-btn {
+  background: linear-gradient(135deg, #4a2080 0%, #6a40b0 100%);
+  color: #fff;
+  border: none;
+  padding: 0.55em 1.3em;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  box-shadow: 0 3px 10px rgba(80,30,160,0.5);
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+#start-game-btn:hover,
+#new-game-btn:hover,
+#enter-fullscreen-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(80,30,160,0.7);
+}
+#start-game-btn:active,
+#new-game-btn:active,
+#enter-fullscreen-btn:active { transform: translateY(0); }
+#new-game-btn {
+  background: linear-gradient(135deg, #205060 0%, #408080 100%);
+  box-shadow: 0 3px 10px rgba(40,100,120,0.5);
+}
+#enter-fullscreen-btn {
+  background: linear-gradient(135deg, #404090 0%, #6060c0 100%);
+  box-shadow: 0 3px 10px rgba(80,80,180,0.5);
+}
+
+#game-picker-label {
+  color: #c8c8e0;
+  font-size: 0.95rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+#game-variant {
+  background: #20203a;
+  color: #e8e8ff;
+  border: 1px solid #5050a0;
+  border-radius: 6px;
+  padding: 0.4em 0.6em;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+#game-variant:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+#enable-shake-btn {
+  display: none;
+  background: #2a2a50;
+  color: #c0c0ff;
+  border: 1px solid #5050a0;
+  padding: 0.45em 1em;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+#enable-shake-btn:disabled {
+  background: #20402a;
+  color: #80d090;
+  border-color: #408060;
+  cursor: default;
+}
+
+/* Roll / Hold action buttons — shown while a game is running.
+   The shake gesture or SPACE/ENTER also work; these are the tap fallback. */
+#game-action-row {
+  display: none;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+#game-action-row.active { display: flex; }
+
+.game-action-btn {
+  flex: 1 1 auto;
+  min-width: 7rem;
+  padding: 0.7em 1.2em;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s, opacity 0.15s;
+}
+#roll-btn {
+  background: linear-gradient(135deg, #2080a0 0%, #40b0c0 100%);
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(40,160,200,0.45);
+}
+#hold-btn {
+  background: linear-gradient(135deg, #a06020 0%, #c08040 100%);
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(160,100,40,0.45);
+}
+.game-action-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.game-action-btn:active:not(:disabled) { transform: translateY(0); }
+.game-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+#game-status {
+  color: #8888bb;
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+#game-player-list {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.game-player-chip {
+  background: #2a2a50;
+  color: #a0a0cc;
+  border: 1px solid #404080;
+  padding: 0.2em 0.65em;
+  border-radius: 20px;
+  font-size: 0.82em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.game-player-chip.me {
+  background: #3a2070;
+  color: #c8a0ff;
+  border-color: #7040c0;
+}
+.game-player-chip.current {
+  background: #2a4a30;
+  color: #b0e8b0;
+  border-color: #408050;
+  box-shadow: 0 0 0 1px #408050 inset;
+}
+.game-player-chip.kicked {
+  background: #2a1a1a;
+  color: #806060;
+  border-color: #503030;
+  text-decoration: line-through;
+}
+.game-player-chip .turn-timer {
+  font-family: monospace;
+  font-size: 0.85em;
+  color: #d0d090;
+  background: rgba(0,0,0,0.3);
+  padding: 0.05em 0.35em;
+  border-radius: 8px;
+}
+.game-player-chip .kick-btn {
+  background: #602020;
+  color: #ffc0c0;
+  border: 1px solid #803030;
+  width: 1.4em;
+  height: 1.4em;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0.95em;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.game-player-chip .kick-btn:hover:not(:disabled) { background: #803030; }
+.game-player-chip .kick-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Responsive canvas — Ebiten sets the logical size; CSS scales it.
+   The canvas selector targets whatever <canvas> Ebiten ends up creating
+   inside this container, not a specific ID, because Ebiten v2 doesn't let
+   us pick the element. We override Ebiten's inline width: 100%; height:
+   100% with our own constrained sizing. height: auto lets the browser
+   derive a non-distorting display height from the canvas's intrinsic
+   dimensions, which Ebiten ties to body.clientWidth × DPR each frame. */
+#game-container {
+  margin-top: 0.75rem;
+  max-width: 800px;
+}
+#game-container canvas {
+  display: block !important;
+  max-width: 800px !important;
+  width: 100% !important;
+  height: auto !important;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(60,20,120,0.7);
+  border: 2px solid #4a2090;
+  margin: 0 auto;
+  outline: none;
+  background: #12121f;
+}
+
+/* ── DOM game-state panel ──────────────────────────────
+   Mirrors the canvas (scores, turn message, die value) in plain HTML so the
+   player can always read the state — especially on mobile fullscreen where
+   the WebGL canvas can render blank. */
+#game-state-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: #1a1a2e;
+  border: 1px solid #4a2090;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+#game-state-message {
+  color: #ffe15a;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+#game-state-message.theirs    { color: #a0c8ff; }
+#game-state-message.game-over { color: #80f0a0; }
+#game-state-dice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+#game-state-die-faces {
+  display: flex;
+  gap: 0.5rem;
+}
+.die-face {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 8px;
+  background: #fff;
+  color: #111;
+  display: grid;
+  place-items: center;
+  font-size: 1.8rem;
+  font-weight: 700;
+  font-family: monospace;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  flex-shrink: 0;
+}
+.die-face[data-value="0"]::before { content: "?"; color: #888; }
+.die-face[data-value="1"]::before { content: "1"; }
+.die-face[data-value="2"]::before { content: "2"; }
+.die-face[data-value="3"]::before { content: "3"; }
+.die-face[data-value="4"]::before { content: "4"; }
+.die-face[data-value="5"]::before { content: "5"; }
+.die-face[data-value="6"]::before { content: "6"; }
+.die-face.rolling::before { content: "🎲"; }
+.die-face.rolling {
+  animation: dice-roll-toss 0.55s ease-in-out infinite alternate;
+}
+.die-face.rolling:nth-child(2) {
+  animation-duration: 0.5s;
+  animation-delay: -0.1s;
+}
+@keyframes dice-roll-toss {
+  0%   { transform: translate(-12px, -4px) rotate(-26deg) scale(0.95); }
+  25%  { transform: translate(8px, -22px)  rotate(48deg)  scale(1.08); }
+  50%  { transform: translate(18px, 6px)   rotate(82deg)  scale(1.0);  }
+  75%  { transform: translate(-6px, -14px) rotate(-32deg) scale(1.04); }
+  100% { transform: translate(-16px, 4px)  rotate(-72deg) scale(0.97); }
+}
+#game-state-die-label {
+  color: #c8c8e6;
+  font-size: 0.95rem;
+}
+#game-state-scores {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+#game-state-scores li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35em 0.6em;
+  border-radius: 6px;
+  background: #20203a;
+  color: #c8c8e0;
+  font-size: 0.95rem;
+}
+#game-state-scores li.me       { background: #3a2070; color: #e8d4ff; }
+#game-state-scores li.current  { outline: 2px solid #80c890; }
+#game-state-scores li.kicked   { opacity: 0.45; text-decoration: line-through; }
+#game-state-scores .player-label { font-weight: 600; }
+#game-state-scores .player-score {
+  font-family: monospace;
+  font-size: 1.05rem;
+  color: #ffe15a;
+}
+#game-state-scores li.me .player-score { color: #ffeebb; }
+#game-state-scores .player-turn {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: #a0c8ff;
+}
+
+/* ── Mobile fullscreen takeover ────────────────────────
+   Toggled by dice_game.js when it's the local player's turn on a narrow
+   viewport. The dice panel fills the screen so the canvas + buttons are
+   big and thumb-reachable; the video grid shrinks to a corner PIP. */
+#exit-fullscreen-btn {
+  display: none;
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 1002;
+  background: rgba(40,30,90,0.85);
+  color: #fff;
+  border: 1px solid #6040b0;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+body.dice-fullscreen { overflow: hidden; }
+
+body.dice-fullscreen #video-room-header {
+  display: none;
+}
+
+/* Video PIP — small overlay at the bottom-right so it doesn't fight the
+   chip row at the top for screen space. */
+body.dice-fullscreen #video-root {
+  position: fixed;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  width: 28vw;
+  max-width: 140px;
+  z-index: 1001;
+  padding: 0;
+}
+body.dice-fullscreen #video-grid {
+  gap: 4px;
+}
+body.dice-fullscreen #video-grid video {
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+}
+
+body.dice-fullscreen #game-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  padding: 0.5rem 0.5rem 0.5rem;
+  overflow: hidden;
+  border-top: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+body.dice-fullscreen #game-panel h2 { display: none; }
+body.dice-fullscreen #game-header-row {
+  margin-bottom: 0;
+  padding-left: 2.5rem;   /* leave room for the exit button */
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+body.dice-fullscreen #start-game-btn,
+body.dice-fullscreen #enter-fullscreen-btn,
+body.dice-fullscreen #game-picker-label,
+body.dice-fullscreen #enable-shake-btn { display: none !important; }
+body.dice-fullscreen .game-player-chip { font-size: 0.74em; padding: 0.15em 0.5em; }
+body.dice-fullscreen #game-status { font-size: 0.8em; }
+
+/* Mobile fullscreen: the canvas can render blank on some phones (small
+   display rect + Ebiten's pixel-ratio assumptions), so we promote the DOM
+   state panel to fill the available space and hide the canvas entirely.
+   The panel already shows scores, turn message, and die value — everything
+   the canvas would have shown — and renders reliably. */
+body.dice-fullscreen #game-container,
+body.dice-fullscreen #game-container canvas { display: none !important; }
+
+body.dice-fullscreen #game-state-panel {
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem 0.85rem;
+  background: #161628;
+  border: none;
+  border-radius: 6px;
+  gap: 1rem;
+}
+body.dice-fullscreen #game-state-message { font-size: 1.15rem; }
+body.dice-fullscreen .die-face { width: 4rem; height: 4rem; font-size: 2.4rem; }
+body.dice-fullscreen #game-state-die-label { font-size: 1rem; }
+body.dice-fullscreen #game-state-scores li { font-size: 1.05rem; padding: 0.5em 0.75em; }
+body.dice-fullscreen #game-state-scores .player-score { font-size: 1.2rem; }
+
+body.dice-fullscreen #game-action-row {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+body.dice-fullscreen #game-action-row.active .game-action-btn {
+  padding: 1em 1.2em;
+  font-size: 1.1rem;
+}
+body.dice-fullscreen #exit-fullscreen-btn { display: block; }
 </style>{{ end }}
+
 {{ define "main" }}
 <div id="video-room-header">
-  <span>Room: <code>{{ .RoomID }}</code></span>
-  <button id="copy-link-btn">Copy Invite Link</button>
+  <span>Room: <span class="room-badge">{{ .RoomID }}</span></span>
+  <button id="copy-link-btn">Copy Link</button>
+  <button id="share-sms-btn" class="share-link-btn" type="button">&#128241; Text Invite</button>
 </div>
+
 <div id="video-root" data-room-id="{{ .RoomID }}">
   <div id="video-grid">
     <video id="local_video" autoplay controls muted playsinline></video>
@@ -42,5 +519,45 @@
   </div>
 </div>
 
+<!-- ── Dice Game Panel ──────────────────────────────── -->
+<div id="game-panel">
+  <h2>&#127922; Dice Game</h2>
+  <div id="game-header-row">
+    <label id="game-picker-label" for="game-variant">
+      Game:
+      <select id="game-variant">
+        <option value="pig" selected>Pig Dice</option>
+        <option value="bigpig">Big Pig (2 dice)</option>
+      </select>
+    </label>
+    <button id="start-game-btn" type="button">Start Game</button>
+    <button id="new-game-btn" type="button" style="display:none;">New Game</button>
+    <button id="enter-fullscreen-btn" type="button" style="display:none;">Fullscreen</button>
+    <button id="enable-shake-btn" type="button">Enable Shake-to-Roll</button>
+    <span id="game-status"></span>
+    <div id="game-player-list"></div>
+  </div>
+  <div id="game-action-row">
+    <button id="roll-btn" class="game-action-btn" type="button">Roll &#127922;</button>
+    <button id="hold-btn" class="game-action-btn" type="button">Hold</button>
+  </div>
+  <button id="exit-fullscreen-btn" type="button" title="Show videos">&#9166;</button>
+  <div id="game-state-panel" style="display:none;">
+    <div id="game-state-message"></div>
+    <div id="game-state-dice">
+      <div id="game-state-die-faces"></div>
+      <span id="game-state-die-label">Waiting…</span>
+    </div>
+    <ul id="game-state-scores"></ul>
+  </div>
+  <!-- Ebiten v2 always creates its own <canvas> and appends it to
+       document.body at runtime; dice_game.js intercepts that and moves it
+       into this container so it renders inside the bordered area instead
+       of stacked below the page footer. -->
+  <div id="game-container" style="display:none;"></div>
+</div>
+
+<script src="/js/wasm_exec.js"></script>
 <script type="text/javascript" src="/js/video.js"></script>
+<script type="text/javascript" src="/js/dice_game.js"></script>
 {{ end }}
