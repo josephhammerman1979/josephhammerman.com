@@ -42,6 +42,7 @@ type MultiplayerPigGame struct {
 	rollRequested bool         // set by external input (e.g. phone shake / Roll button)
 	holdRequested bool         // set by external input (Hold button)
 	turnChangeFn  func(int)    // optional: invoked with CurrentIndex on every turn change
+	gameOverFn    func(int)    // optional: invoked with the winner's index (-1 if no winner)
 }
 
 // RequestRoll asks the game to roll on the next Update, as if the local
@@ -88,7 +89,9 @@ func (g *MultiplayerPigGame) Kick(slot int) {
 	}
 	if remaining <= 1 {
 		g.GameOver = true
+		winnerIdx := -1
 		if remaining == 1 {
+			winnerIdx = lastIdx
 			g.WinnerID = g.Players[lastIdx].ID
 			if lastIdx == g.myPlayerIdx {
 				g.Message = "You win by default — every other player was kicked!"
@@ -97,6 +100,9 @@ func (g *MultiplayerPigGame) Kick(slot int) {
 			}
 		} else {
 			g.Message = "Game over — all players were kicked."
+		}
+		if g.gameOverFn != nil {
+			g.gameOverFn(winnerIdx)
 		}
 		return
 	}
@@ -115,6 +121,48 @@ func (g *MultiplayerPigGame) SetTurnChangeFn(fn func(int)) {
 	g.turnChangeFn = fn
 	if fn != nil {
 		fn(g.CurrentIndex)
+	}
+}
+
+// SetGameOverFn registers a callback fired exactly once when the game ends,
+// either because a player reached WinningScore or because Kick reduced the
+// roster to one un-kicked player.  The argument is the winning player's
+// index, or -1 if every player was kicked.
+func (g *MultiplayerPigGame) SetGameOverFn(fn func(int)) {
+	g.gameOverFn = fn
+}
+
+// Reset restarts the game with a (possibly new) player count + local index,
+// re-using the existing Ebiten run loop.  Called from JS via diceGameReset
+// so a "New Game" click doesn't have to reload the WASM module.
+func (g *MultiplayerPigGame) Reset(numPlayers, myPlayerIdx int) {
+	if numPlayers < 1 {
+		return
+	}
+	rand.Seed(time.Now().UnixNano())
+	g.Players = make([]*Player, numPlayers)
+	for i := range g.Players {
+		g.Players[i] = &Player{ID: i + 1}
+	}
+	g.Players[0].IsActive = true
+	g.CurrentIndex = 0
+	g.GameOver = false
+	g.WinnerID = 0
+	g.myPlayerIdx = myPlayerIdx
+	g.inputCooldown = 30
+	g.localRolling = false
+	g.rollRequested = false
+	g.holdRequested = false
+	g.pendingEvent = nil
+	g.Die = NewDice()
+
+	if myPlayerIdx == 0 {
+		g.Message = fmt.Sprintf("Your turn, Player %d — SPACE to roll", myPlayerIdx+1)
+	} else {
+		g.Message = "Waiting for Player 1 to roll..."
+	}
+	if g.turnChangeFn != nil {
+		g.turnChangeFn(g.CurrentIndex)
 	}
 }
 
@@ -199,6 +247,9 @@ func (g *MultiplayerPigGame) applyHold(playerIdx int) {
 			g.Message = fmt.Sprintf("You win with %d points!", cur.TotalScore)
 		} else {
 			g.Message = fmt.Sprintf("Player %d wins with %d points!", g.WinnerID, cur.TotalScore)
+		}
+		if g.gameOverFn != nil {
+			g.gameOverFn(playerIdx)
 		}
 	} else {
 		if playerIdx == g.myPlayerIdx {

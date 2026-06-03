@@ -64,6 +64,23 @@ func main() {
 		}
 	})
 
+	// Bridge game-over so the host page can show a "New Game" button.
+	g.SetGameOverFn(func(winnerIdx int) {
+		fn := js.Global().Get("diceGameOnGameOver")
+		if fn.Truthy() {
+			fn.Invoke(winnerIdx)
+		}
+	})
+
+	// Expose window.diceGameReset(numPlayers, myPlayerIdx) so a "New Game"
+	// click in JS restarts the game without reloading the WASM module.
+	js.Global().Set("diceGameReset", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) >= 2 {
+			g.Reset(args[0].Int(), args[1].Int())
+		}
+		return nil
+	}))
+
 	ebiten.SetWindowSize(game.ScreenWidth, game.ScreenHeight)
 	ebiten.SetWindowTitle("Pig Dice — Multiplayer")
 

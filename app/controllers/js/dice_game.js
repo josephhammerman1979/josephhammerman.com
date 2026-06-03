@@ -8,8 +8,11 @@
 // "Running" means a game is in progress in this tab (WASM loaded, we're a
 // participant). "Spectating" means a game is in progress in the room but we
 // joined after it started — we get chips + status, no WASM, no Roll/Hold.
+// "Ended" means the most recent game finished; a New Game click can start
+// a fresh round without reloading the WASM.
 let diceGameRunning = false;
 let diceGameSpectating = false;
+let gameEnded = false;
 
 // The roster is captured at game_start time and frozen for the life of that
 // game. The host's broadcast carries the authoritative list. New peers
@@ -40,6 +43,7 @@ function _playerListBySlot() {
  */
 function startDiceGame() {
   if (diceGameRunning || diceGameSpectating) return;
+  if (gameEnded) _resetGameState();
 
   const roster = _playerListBySlot();
   if (roster.length === 0) return;
@@ -119,8 +123,56 @@ function _initDiceGame(roster, hostID) {
     });
   };
 
-  _loadWasm();
+  // If a previous game already loaded the WASM module, reset it in-place
+  // (the Ebiten run loop is still alive). Otherwise instantiate fresh.
+  if (typeof window.diceGameReset === "function") {
+    window.diceGameReset(roster.length, myGameSlot);
+  } else {
+    window.diceGameConfig = {
+      numPlayers:  roster.length,
+      myPlayerIdx: myGameSlot,
+    };
+    _loadWasm();
+  }
 }
+
+// Clear all per-game state in preparation for a fresh round.  Does not
+// touch the WASM (a subsequent _initDiceGame will call diceGameReset).
+function _resetGameState() {
+  diceGameRunning    = false;
+  diceGameSpectating = false;
+  gameEnded          = false;
+  gameRoster         = [];
+  gameHostID         = null;
+  myGameSlot         = -1;
+  currentTurnIdx     = -1;
+  turnStartedAt      = 0;
+  kickedSlots.clear();
+  if (chipTickHandle) { clearInterval(chipTickHandle); chipTickHandle = null; }
+
+  const newGameBtn = document.getElementById("new-game-btn");
+  const statusEl   = document.getElementById("game-status");
+  const actionRow  = document.getElementById("game-action-row");
+  if (newGameBtn) newGameBtn.style.display = "none";
+  if (statusEl)   statusEl.textContent = "";
+  if (actionRow)  actionRow.classList.remove("active");
+}
+
+// Click handler for the "New Game" button shown after the game ends.
+// Resets local state and broadcasts a fresh game_start; peers also reset
+// when they see the broadcast (they're either gameEnded already, or were
+// spectators of the finished round).
+function startNewGame() {
+  if (!gameEnded && !(diceGameRunning || diceGameSpectating)) return;
+  _resetGameState();
+  startDiceGame();
+}
+
+// Wire the New Game button once on script load.
+(function setupNewGameButton() {
+  const btn = document.getElementById("new-game-btn");
+  if (btn) btn.addEventListener("click", startNewGame);
+})();
 
 // ── On-screen Roll / Hold buttons ────────────────────────────────────────────
 
@@ -153,6 +205,15 @@ function _refreshActionButtons() {
   if (rollBtn) rollBtn.disabled = !myTurn;
   if (holdBtn) holdBtn.disabled = !myTurn;
 }
+
+// Called by the WASM when the game ends — either a winning hold or a Kick
+// that left only one un-kicked player.  Surfaces the New Game button so the
+// round can be replayed without reloading the page.
+window.diceGameOnGameOver = function(_winnerIdx) {
+  gameEnded = true;
+  const newGameBtn = document.getElementById("new-game-btn");
+  if (newGameBtn) newGameBtn.style.display = "inline-block";
+};
 
 // Called by the WASM whenever the current player changes (also once at game
 // start with the initial CurrentIndex).  Tracks the value, resets the AFK
@@ -251,15 +312,19 @@ async function _loadWasm() {
 function handleDiceGameMessage(msg) {
   switch (msg.type) {
     case "game_start":
-      if (!diceGameRunning && !diceGameSpectating && Array.isArray(msg.roster)) {
-        _initDiceGame(msg.roster, msg.from);
-        // Replay any kicks the host already applied so we don't come back
-        // un-kicked / with a stale player count on refresh-during-game.
-        if (Array.isArray(msg.kicked)) {
-          msg.kicked.forEach((slot) => _applyKick(slot, msg.from));
-        }
-        _ensureChipTick();
+      if (!Array.isArray(msg.roster)) break;
+      // Ignore game_start while a game is actively running here.  But if the
+      // last game ended, or we were spectating a finished round, accept the
+      // fresh broadcast — _resetGameState drops the stale state first.
+      if (diceGameRunning && !gameEnded) break;
+      if (diceGameSpectating || gameEnded) _resetGameState();
+      _initDiceGame(msg.roster, msg.from);
+      // Replay any kicks the host already applied so a refreshed-mid-game
+      // rejoin comes back to the same logical state.
+      if (Array.isArray(msg.kicked)) {
+        msg.kicked.forEach((slot) => _applyKick(slot, msg.from));
       }
+      _ensureChipTick();
       break;
 
     case "game_event":

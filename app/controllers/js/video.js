@@ -53,6 +53,20 @@ document.getElementById("copy-link-btn").addEventListener("click", () => {
   });
 });
 
+// SMS / Email invite buttons. On phones, sms:?body=… opens the native
+// Messages composer; mailto:?subject=…&body=… opens the default mail app.
+// On desktop they hand off to whichever protocol handler is registered.
+(function setupShareButtons() {
+  const url     = window.location.href;
+  const subject = "Join my video room";
+  const body    = "Join me in this video room: " + url;
+  const smsBtn   = document.getElementById("share-sms-btn");
+  const emailBtn = document.getElementById("share-email-btn");
+  if (smsBtn)   smsBtn.href   = "sms:?&body=" + encodeURIComponent(body);
+  if (emailBtn) emailBtn.href = "mailto:?subject=" + encodeURIComponent(subject)
+                              + "&body=" + encodeURIComponent(body);
+})();
+
 // Resize all videos based on how many are present
 function updateLayout() {
   const grid = document.getElementById("video-grid");
