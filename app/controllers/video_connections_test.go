@@ -455,3 +455,110 @@ func TestRoomFullRejected(t *testing.T) {
 		t.Fatalf("expected 409 for full room, got %v", resp)
 	}
 }
+
+// ─── Game hub ─────────────────────────────────────────────────────────────────
+
+func sendJSON(t *testing.T, conn *websocket.Conn, v map[string]interface{}) {
+	t.Helper()
+	raw, _ := json.Marshal(v)
+	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+func TestGameHubRunsAGame(t *testing.T) {
+	srv, _ := newTestServer(t)
+	room := "roomGAM1"
+
+	connA := dialWS(t, srv.URL, room, "usergam1")
+	defer connA.Close()
+	cat := readUntilType(t, connA, "game_catalog", time.Second)
+	if gs, _ := cat["games"].([]interface{}); len(gs) == 0 {
+		t.Fatal("empty game catalog")
+	}
+	connB := dialWS(t, srv.URL, room, "usergam2")
+	defer connB.Close()
+	_ = readUntilType(t, connB, "game_none", time.Second)
+
+	for _, c := range []struct {
+		conn *websocket.Conn
+		id   string
+	}{{connA, "usergam1"}, {connB, "usergam2"}} {
+		sendJSON(t, c.conn, map[string]interface{}{"type": "hello", "from": c.id, "to": "room", "roomID": room, "dice": true})
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	sendJSON(t, connA, map[string]interface{}{"type": "game_new", "from": "usergam1", "to": "server", "roomID": room, "gameId": "pig"})
+	stA := readUntilType(t, connA, "game_state", time.Second)
+	stB := readUntilType(t, connB, "game_state", time.Second)
+	if roster, _ := stA["roster"].([]interface{}); len(roster) != 2 {
+		t.Fatalf("roster = %v", stA["roster"])
+	}
+	if stA["mySeat"] != float64(0) || stB["mySeat"] != float64(1) {
+		t.Fatalf("seats: A=%v B=%v", stA["mySeat"], stB["mySeat"])
+	}
+
+	// Out-of-turn action is rejected with an error to the sender only.
+	sendJSON(t, connB, map[string]interface{}{"type": "game_action", "from": "usergam2", "to": "server", "roomID": room,
+		"action": map[string]interface{}{"type": "roll"}})
+	errMsg := readUntilType(t, connB, "game_error", time.Second)
+	if errMsg["message"] != "It isn't your turn." {
+		t.Fatalf("error = %v", errMsg["message"])
+	}
+
+	// A rolls; both get a new state with the roll in the log.
+	sendJSON(t, connA, map[string]interface{}{"type": "game_action", "from": "usergam1", "to": "server", "roomID": room,
+		"action": map[string]interface{}{"type": "roll"}})
+	st := readUntilType(t, connB, "game_state", time.Second)
+	logEntries, _ := st["log"].([]interface{})
+	if len(logEntries) < 2 {
+		t.Fatalf("log after roll = %v", st["log"])
+	}
+
+	// A leaves; B can't remove them before the grace period.
+	connA.Close()
+	st = readUntilType(t, connB, "game_state", 2*time.Second)
+	if conn, _ := st["connected"].([]interface{}); conn[0] != false {
+		t.Fatalf("connected = %v after A left", st["connected"])
+	}
+	sendJSON(t, connB, map[string]interface{}{"type": "game_remove", "from": "usergam2", "to": "server", "roomID": room, "seat": 0})
+	errMsg = readUntilType(t, connB, "game_error", time.Second)
+	if !strings.HasPrefix(errMsg["message"].(string), "Give them") {
+		t.Fatalf("early remove error = %v", errMsg["message"])
+	}
+
+	// A rejoins and gets the game back.
+	connA2 := dialWS(t, srv.URL, room, "usergam1")
+	defer connA2.Close()
+	st = readUntilType(t, connA2, "game_state", time.Second)
+	if st["mySeat"] != float64(0) {
+		t.Fatalf("rejoined seat = %v", st["mySeat"])
+	}
+}
+
+func TestGameHubSpectatorCannotRestart(t *testing.T) {
+	srv, _ := newTestServer(t)
+	room := "roomGAM2"
+	connA := dialWS(t, srv.URL, room, "usergam3")
+	defer connA.Close()
+	connB := dialWS(t, srv.URL, room, "usergam4")
+	defer connB.Close()
+	time.Sleep(30 * time.Millisecond)
+	sendJSON(t, connA, map[string]interface{}{"type": "hello", "from": "usergam3", "to": "room", "roomID": room, "dice": true})
+	sendJSON(t, connB, map[string]interface{}{"type": "hello", "from": "usergam4", "to": "room", "roomID": room, "dice": true})
+	time.Sleep(30 * time.Millisecond)
+	sendJSON(t, connA, map[string]interface{}{"type": "game_new", "from": "usergam3", "to": "server", "roomID": room, "gameId": "pig"})
+	_ = readUntilType(t, connA, "game_state", time.Second)
+
+	connC := dialWS(t, srv.URL, room, "usergam5")
+	defer connC.Close()
+	st := readUntilType(t, connC, "game_state", time.Second)
+	if st["mySeat"] != float64(-1) {
+		t.Fatalf("late joiner seat = %v, want spectator", st["mySeat"])
+	}
+	sendJSON(t, connC, map[string]interface{}{"type": "game_new", "from": "usergam5", "to": "server", "roomID": room, "gameId": "bigpig"})
+	errMsg := readUntilType(t, connC, "game_error", time.Second)
+	if !strings.Contains(errMsg["message"].(string), "only its players") {
+		t.Fatalf("spectator restart error = %v", errMsg["message"])
+	}
+}

@@ -1,0 +1,106 @@
+/* games-boards.css — styles for the boards game renderers (js/games/boards.js):
+   Klondike, Hundreds, Three Hands, Rule Maker. */
+
+.bd-game { display: flex; flex-direction: column; gap: 0.75rem; }
+
+/* Tokens drawn as coins. */
+.bd-tokens { display: inline-flex; gap: 0.2rem; align-items: center; flex-wrap: wrap; color: var(--g-muted); }
+.bd-token {
+  width: 0.95rem; height: 0.95rem; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff2a0, #d8a020);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.6);
+}
+.bd-token.pool { background: radial-gradient(circle at 35% 35%, #c8d8ff, #5070c0); }
+
+/* ── Klondike ── */
+.bk-point { border: 2px solid #8a6a20; }
+.bk-point .big-number { font-size: 1.3rem; }
+.bk-who { min-width: 5rem; font-weight: 600; }
+
+/* ── Hundreds ── */
+.hb-mode {
+  display: inline-block; padding: 0.2em 0.7em; border-radius: 8px;
+  font-weight: 800; letter-spacing: 0.04em;
+}
+.hb-mode.high { background: #1f3a5a; color: var(--g-blue); }
+.hb-mode.low { background: #5a1f3a; color: #ffb0d0; animation: hb-low 1.6s ease-in-out infinite; }
+@keyframes hb-low { 50% { box-shadow: 0 0 10px 1px rgba(255,120,180,0.5); } }
+
+.hb-boards { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.hb-board {
+  background: #fffdf6; color: #222;
+  border: 2px solid #222; border-radius: 10px;
+  padding: 0.4rem 0.5rem; display: flex; flex-direction: column; gap: 0.3rem;
+  box-shadow: 3px 3px 0 #000;
+}
+.hb-board.current { border-color: var(--g-accent); box-shadow: 0 0 0 3px var(--g-accent); }
+.hb-board.good { border-color: #1f7a45; box-shadow: 0 0 0 3px var(--g-good); }
+.hb-board.bad { border-color: #902a2a; box-shadow: 0 0 0 3px var(--g-bad); }
+.hb-head { display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; }
+.hb-name { font-weight: 700; }
+.hb-number { font-family: monospace; font-size: 1.2rem; font-weight: 800; letter-spacing: 0.1em; }
+.hb-board .bd-tokens { color: #666; }
+.hb-squares { display: grid; grid-template-columns: repeat(3, auto); gap: 0.3rem; }
+.hb-cell {
+  display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
+  border: 2px solid #222; border-radius: 6px; padding: 0.3rem;
+}
+.hb-cell small { font-size: 0.7rem; text-transform: uppercase; color: #555; }
+.hb-cell .die.empty { border-color: #999; }
+.btn.hb-slot {
+  min-width: 0; padding: 0.2rem; background: #fff3b0;
+  box-shadow: 0 0 0 3px var(--g-accent); animation: hb-slot 1.2s ease-in-out infinite;
+}
+.btn.hb-slot .die { opacity: 0.55; }
+.btn.hb-slot:hover .die { opacity: 1; }
+@keyframes hb-slot { 50% { box-shadow: 0 0 0 5px var(--g-accent); } }
+
+/* ── Three Hands ── */
+.th-board { gap: 0.4rem; }
+.th-row {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 0.4rem;
+}
+.th-names div { font-weight: 700; text-align: center; color: #c8c8e6; }
+.th-names .turn { color: #ffe15a; }
+.th-names .turn::before { content: "▶ "; }
+.th-vs { font-size: 0.8rem; color: var(--g-muted); text-align: center; min-width: 3.5rem; }
+.th-area, .btn.th-area {
+  display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+  background: #fffdf6; color: #222; border: 2px solid #222; border-radius: 8px;
+  padding: 0.35rem; min-width: 0; font-weight: 400;
+}
+.th-area .dice-row { gap: 0.25rem; justify-content: center; }
+.th-area .die.empty { border-color: #999; }
+.th-area.full { background: #f0eee4; }
+.btn.th-area.open { box-shadow: 0 0 0 3px var(--g-accent); animation: hb-slot 1.2s ease-in-out infinite; }
+.th-ghost .die { opacity: 0.45; }
+.th-hand { font-size: 0.8rem; font-weight: 700; color: #333; }
+.th-hand.note { color: #777; font-weight: 400; }
+details.board-section summary { cursor: pointer; font-weight: 600; color: #b8b8f0; }
+
+/* ── Rule Maker ── */
+.rm-form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin: 0; }
+.rm-vote .btn { flex: 1 1 8rem; font-size: 1.3rem; padding: 0.9em 1em; }
+.rm-proposal {
+  margin: 0; padding: 0.6rem 0.9rem; border-left: 5px solid var(--g-accent);
+  background: #2a2a50; border-radius: 6px; font-size: 1.15rem; font-style: italic;
+  overflow-wrap: anywhere;
+}
+.rm-proposal.small { font-size: 0.95rem; }
+.rm-rules { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: 0.3rem; overflow-wrap: anywhere; }
+
+@media (max-width: 480px) {
+  .th-area .die { --die-size: 2.1rem; }
+  .th-area .die.small { --die-size: 1.35rem; }
+  .hb-boards { flex-direction: column; }
+  .hb-board { align-self: stretch; }
+  .hb-squares { justify-content: center; }
+}
+
+/* Fullscreen enlarges every die; keep the side-by-side Three Hands board and
+   the small summary dice on a phone screen. */
+body.dice-fullscreen .th-area .die { --die-size: 2.3rem; }
+body.dice-fullscreen .th-area .die.small,
+body.dice-fullscreen .bd-game .die.small { --die-size: 1.5rem; }
+body.dice-fullscreen .btn.th-area,
+body.dice-fullscreen .btn.hb-slot { flex: 0 1 auto; padding: 0.35rem; font-size: 1rem; }

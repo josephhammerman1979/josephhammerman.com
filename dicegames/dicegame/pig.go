@@ -17,7 +17,6 @@ type Player struct {
 	TotalScore int
 	TurnScore  int
 	IsActive   bool
-	Kicked     bool // multiplayer only: host removed this player, turns skipped
 }
 
 type PigGame struct {

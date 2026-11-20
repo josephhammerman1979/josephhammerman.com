@@ -1,0 +1,462 @@
+/* games.css — dice game panel, boards, and rules pages.
+   Game renderers (js/games/*.js) build boards from the generic pieces in
+   the "Board building blocks" section; game-specific styles go in that
+   game group's own stylesheet. */
+
+:root {
+  --g-bg: #12121f;
+  --g-panel: #1a1a2e;
+  --g-raised: #20203a;
+  --g-border: #4a2090;
+  --g-text: #e8e8ff;
+  --g-muted: #a8a8c8;
+  --g-accent: #ffd84a;
+  --g-good: #80f0a0;
+  --g-bad: #ff8080;
+  --g-blue: #a0c8ff;
+}
+
+/* ── Panel and header ─────────────────────────────── */
+#game-panel {
+  grid-column: 1 / 4;
+  padding: 1rem;
+  box-sizing: border-box;
+  border-top: 2px solid #2e2e50;
+  background: var(--g-bg);
+  color: var(--g-text);
+}
+#game-panel h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #9090cc;
+}
+#game-header-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+#game-picker-label,
+.game-option {
+  color: #c8c8e0;
+  font-size: 0.95rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+#game-picker,
+.game-option select,
+#game-board select,
+#game-board input[type="number"],
+#game-board input[type="text"] {
+  background: var(--g-raised);
+  color: var(--g-text);
+  border: 1px solid #5050a0;
+  border-radius: 6px;
+  padding: 0.4em 0.6em;
+  font: inherit;
+  font-size: 0.95rem;
+}
+#game-board input[type="number"] { width: 4.5em; }
+#game-board input[type="text"] { min-width: 14em; flex: 1 1 14em; }
+
+#start-game-btn,
+#enter-fullscreen-btn {
+  background: linear-gradient(135deg, #4a2080 0%, #6a40b0 100%);
+  color: #fff;
+  border: none;
+  padding: 0.55em 1.3em;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 3px 10px rgba(80,30,160,0.5);
+}
+#start-game-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+#enter-fullscreen-btn { background: linear-gradient(135deg, #404090 0%, #6060c0 100%); display: none; }
+
+#enable-shake-btn {
+  display: none;
+  background: #2a2a50;
+  color: #c0c0ff;
+  border: 1px solid #5050a0;
+  padding: 0.45em 1em;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+#enable-shake-btn:disabled { background: #20402a; color: #80d090; border-color: #408060; cursor: default; }
+
+#game-status { color: #8888bb; font-size: 0.9em; font-style: italic; }
+#game-status.error { color: var(--g-bad); font-style: normal; font-weight: 600; }
+
+#shake-hint {
+  flex-basis: 100%;
+  background: #2a2a50;
+  color: #d0d0f0;
+  border: 1px solid #5050a0;
+  border-radius: 6px;
+  padding: 0.5em 0.75em;
+  font-size: 0.88rem;
+}
+#shake-hint button {
+  margin-left: 0.5em;
+  background: #4a4a90;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.2em 0.7em;
+  cursor: pointer;
+}
+
+/* ── How to play ──────────────────────────────────── */
+#game-rules {
+  margin: 0 0 0.75rem;
+  background: var(--g-panel);
+  border: 1px solid #2e2e50;
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.92rem;
+  color: #c8c8e0;
+}
+#game-rules summary { cursor: pointer; color: #b8b8f0; font-weight: 600; }
+#game-rules ul { margin: 0.4rem 0; padding-left: 1.2rem; }
+#game-rules .rules-links { display: flex; gap: 1rem; flex-wrap: wrap; }
+#game-rules a { color: var(--g-blue); }
+
+/* ── Player chips ─────────────────────────────────── */
+#game-player-list {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.game-player-chip {
+  background: #2a2a50;
+  color: #b0b0dd;
+  border: 1px solid #404080;
+  padding: 0.25em 0.7em;
+  border-radius: 20px;
+  font-size: 0.85em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+}
+.game-player-chip.me { background: #3a2070; color: #d8b8ff; border-color: #7040c0; }
+.game-player-chip.current { border-color: var(--g-accent); box-shadow: 0 0 0 1px var(--g-accent) inset; color: #fff2b0; }
+.game-player-chip.winner { border-color: var(--g-good); color: var(--g-good); }
+.game-player-chip.away { border-style: dashed; color: #ff9a6a; }
+.game-player-chip.kicked { background: #2a1a1a; color: #806060; border-color: #503030; text-decoration: line-through; }
+.game-player-chip .chip-badge {
+  font-family: monospace;
+  background: rgba(0,0,0,0.3);
+  padding: 0.05em 0.4em;
+  border-radius: 8px;
+  color: #ffe15a;
+}
+.game-player-chip .remove-btn {
+  background: #603020;
+  color: #ffd0b0;
+  border: 1px solid #805030;
+  border-radius: 10px;
+  padding: 0 0.5em;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+.game-player-chip .remove-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Turn banner, flash, log ──────────────────────── */
+#game-state-panel {
+  position: relative;
+  padding: 0.75rem 1rem;
+  background: var(--g-panel);
+  border: 1px solid var(--g-border);
+  border-radius: 8px;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+#game-state-message {
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: var(--g-raised);
+  border-left: 6px solid #6070a0;
+  line-height: 1.3;
+}
+#turn-banner-title { font-size: 1.25rem; font-weight: 700; color: var(--g-blue); }
+#turn-banner-detail { font-size: 0.95rem; color: #c8c8e6; }
+#game-state-message.mine {
+  background: linear-gradient(135deg, #5a4210 0%, #3a2a08 100%);
+  border-left-color: var(--g-accent);
+  animation: your-turn-pulse 1.6s ease-in-out infinite;
+}
+#game-state-message.mine #turn-banner-title { color: #ffe15a; font-size: 1.6rem; letter-spacing: 0.04em; }
+#game-state-message.game-over { border-left-color: var(--g-good); }
+#game-state-message.game-over #turn-banner-title { color: var(--g-good); }
+@keyframes your-turn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 216, 74, 0); }
+  50%      { box-shadow: 0 0 16px 2px rgba(255, 216, 74, 0.45); }
+}
+
+#bust-flash {
+  position: absolute;
+  left: 50%;
+  top: 2.5rem;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: none;
+  padding: 0.5em 1.1em;
+  border-radius: 10px;
+  background: #b02a2a;
+  color: #fff;
+  font-size: 1.35rem;
+  font-weight: 800;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.6);
+  pointer-events: none;
+  max-width: 90%;
+  text-align: center;
+}
+#bust-flash.win { background: #1f7a45; }
+#bust-flash.show { display: block; animation: bust-pop 2.2s ease-out forwards; }
+@keyframes bust-pop {
+  0%   { opacity: 0; transform: translateX(-50%) scale(0.6); }
+  12%  { opacity: 1; transform: translateX(-50%) scale(1.06); }
+  20%  { transform: translateX(-50%) scale(1); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+#game-action-log {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 0 0;
+  border-top: 1px solid #2e2e50;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.88rem;
+  color: var(--g-muted);
+}
+#game-action-log li:first-child { color: var(--g-text); }
+#game-action-log li.log-bust { color: var(--g-bad); }
+#game-action-log li.log-good { color: #c0f0a0; }
+#game-action-log li.log-win  { color: var(--g-good); font-weight: 700; }
+
+/* ── Board building blocks ────────────────────────── */
+#game-board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.board-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.board-section {
+  background: var(--g-raised);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.board-section h3 { margin: 0; font-size: 0.95rem; color: #b8b8f0; font-weight: 600; }
+.board-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+.board-actions form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin: 0; }
+.note { color: var(--g-muted); font-size: 0.9rem; margin: 0; }
+.big-number { font-size: 1.6rem; font-weight: 800; color: #ffe15a; font-family: monospace; }
+.pill {
+  display: inline-block;
+  padding: 0.1em 0.55em;
+  border-radius: 10px;
+  background: #2a2a50;
+  color: #d0d0f0;
+  font-size: 0.85em;
+}
+.pill.good { background: #1f4a30; color: var(--g-good); }
+.pill.bad  { background: #4a1f1f; color: var(--g-bad); }
+.pill.gold { background: #4a3a10; color: #ffe15a; }
+
+.btn {
+  flex: 0 1 auto;
+  min-width: 6.5rem;
+  padding: 0.65em 1.2em;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  background: #3a3a70;
+  color: #fff;
+  transition: transform 0.1s, opacity 0.15s;
+}
+.btn.primary { background: linear-gradient(135deg, #2080a0 0%, #40b0c0 100%); box-shadow: 0 3px 10px rgba(40,160,200,0.45); }
+.btn.warn    { background: linear-gradient(135deg, #a06020 0%, #c08040 100%); }
+.btn.danger  { background: linear-gradient(135deg, #902a2a 0%, #c04040 100%); }
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Dice with real pips.  --die-size scales everything. */
+.dice-row { display: inline-flex; gap: 0.45rem; flex-wrap: wrap; align-items: center; }
+.die {
+  --die-size: 2.8rem;
+  width: var(--die-size);
+  height: var(--die-size);
+  box-sizing: border-box;
+  padding: calc(var(--die-size) * 0.12);
+  display: inline-grid;
+  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  background: #fdfdf8;
+  border-radius: 18%;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.6), inset 0 -3px 0 rgba(0,0,0,0.12);
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.die.small { --die-size: 1.7rem; }
+.die.big   { --die-size: 4rem; }
+.die .pip {
+  width: 72%;
+  height: 72%;
+  place-self: center;
+  border-radius: 50%;
+  background: #1a1a1a;
+}
+.die .p-tl { grid-area: 1 / 1; } .die .p-tr { grid-area: 1 / 3; }
+.die .p-ml { grid-area: 2 / 1; } .die .p-mc { grid-area: 2 / 2; } .die .p-mr { grid-area: 2 / 3; }
+.die .p-bl { grid-area: 3 / 1; } .die .p-br { grid-area: 3 / 3; }
+.die.hidden {
+  background: #3a2a60;
+  color: #c8b0ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: calc(var(--die-size) * 0.45);
+}
+.die.empty { background: transparent; border: 2px dashed #5a5a8a; box-shadow: none; }
+.die.kept { outline: 3px solid #80c0ff; outline-offset: 2px; }
+.die.faded { opacity: 0.35; filter: grayscale(1); }
+.die.selectable { cursor: pointer; }
+.die.selectable:hover { transform: translateY(-2px); }
+.die.selected { outline: 3px solid var(--g-accent); outline-offset: 2px; transform: translateY(-4px); }
+.die.fresh { animation: die-tumble 0.6s ease-out; }
+@keyframes die-tumble {
+  0%   { transform: translate(-14px, -18px) rotate(-200deg) scale(0.7); opacity: 0.4; }
+  60%  { transform: translate(4px, 3px) rotate(15deg) scale(1.05); opacity: 1; }
+  100% { transform: none; }
+}
+
+.scoreboard { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+.scoreboard th, .scoreboard td { padding: 0.35em 0.6em; text-align: left; border-bottom: 1px solid #2e2e50; }
+.scoreboard th { color: var(--g-muted); font-weight: 600; font-size: 0.85em; }
+.scoreboard tr.me td.who { color: #d8b8ff; font-weight: 700; }
+.scoreboard tr.current td { background: rgba(255, 216, 74, 0.08); }
+.scoreboard tr.current td.who { color: #ffe15a; }
+.scoreboard tr.current td.who::before { content: "▶ "; }
+.scoreboard tr.removed td { opacity: 0.45; text-decoration: line-through; }
+
+/* Progress toward a target: solid = banked, striped = at risk. */
+.progress { display: flex; height: 6px; border-radius: 3px; background: #14142a; overflow: hidden; min-width: 6rem; }
+.progress .banked { background: #ffe15a; }
+.progress .at-risk { background: repeating-linear-gradient(45deg, #a0c8ff 0 4px, #6080b0 4px 8px); }
+
+/* ── Mobile fullscreen takeover ───────────────────── */
+#exit-fullscreen-btn {
+  display: none;
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 1002;
+  background: rgba(40,30,90,0.85);
+  color: #fff;
+  border: 1px solid #6040b0;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  cursor: pointer;
+  line-height: 1;
+}
+body.dice-fullscreen { overflow: hidden; }
+body.dice-fullscreen #video-room-header { display: none; }
+body.dice-fullscreen #video-root {
+  position: fixed;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  width: 28vw;
+  max-width: 140px;
+  z-index: 1001;
+  padding: 0;
+}
+body.dice-fullscreen #video-grid { gap: 4px; }
+body.dice-fullscreen .tile-label,
+body.dice-fullscreen .tile-badge { font-size: 0.6rem; top: 0.15rem; }
+body.dice-fullscreen #game-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  padding: 0.5rem;
+  overflow-y: auto;
+  border-top: none;
+}
+body.dice-fullscreen #game-header-row { padding-left: 2.5rem; gap: 0.4rem; margin-bottom: 0.4rem; }
+body.dice-fullscreen #game-header-row h2,
+body.dice-fullscreen #game-picker-label,
+body.dice-fullscreen #game-options,
+body.dice-fullscreen #start-game-btn,
+body.dice-fullscreen #enter-fullscreen-btn,
+body.dice-fullscreen #enable-shake-btn,
+body.dice-fullscreen #game-rules { display: none !important; }
+body.dice-fullscreen #exit-fullscreen-btn { display: block; }
+body.dice-fullscreen #turn-banner-title { font-size: 1.4rem; }
+body.dice-fullscreen .die.big { --die-size: 4.2rem; }
+body.dice-fullscreen .die:not(.big):not(.small) { --die-size: 3.2rem; }
+body.dice-fullscreen .btn { padding: 0.9em 1.2em; font-size: 1.1rem; flex: 1 1 auto; }
+
+/* ── Rules pages ──────────────────────────────────── */
+.rules-page { max-width: 46rem; margin: 0 auto; padding: 1rem; grid-column: 1 / 4; }
+.rules-nav { font-size: 0.9rem; line-height: 1.8; margin-bottom: 1rem; }
+.rules-nav a[aria-current] { font-weight: 700; }
+.rules-card {
+  background: #fffdf6;
+  color: #222;
+  border: 2px solid #222;
+  border-radius: 14px;
+  padding: 1.25rem 1.5rem;
+  box-shadow: 6px 6px 0 #222;
+}
+.rules-card h1 { margin-top: 0; font-size: 2rem; }
+.rules-card h2 { font-size: 1.1rem; border-bottom: 2px solid #222; padding-bottom: 0.2rem; }
+.rules-summary { font-style: italic; }
+.rules-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.rules-facts div {
+  border: 2px solid #222;
+  border-radius: 10px;
+  padding: 0.4rem 0.6rem;
+  font-weight: 700;
+  background: #fff;
+}
+.rules-sheet p { line-height: 1.5; }
+.rules-sheet img { max-width: 100%; display: block; margin: 0.75rem 0; }
+.rules-facts .rules-online { background: #fff6cc; }
+.rules-index {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+.rules-tile {
+  background: #fffdf6;
+  color: #222;
+  border: 2px solid #222;
+  border-radius: 12px;
+  padding: 0.8rem 1rem;
+  box-shadow: 4px 4px 0 #222;
+}
+.rules-tile a { color: #222; font-size: 1.15rem; }
+.rules-tile p { margin: 0.4rem 0 0; line-height: 1.4; }
+.rules-players { font-size: 0.85em; opacity: 0.75; margin-left: 0.4rem; }
+.rules-out { font-weight: 700; }

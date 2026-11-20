@@ -10,8 +10,6 @@ func Router(tm *TopicManager) *mux.Router {
 	r := mux.NewRouter()
 	r.PathPrefix("/css/").Handler(http.FileServer(http.FS(ffs)))
 	r.PathPrefix("/js/").Handler(http.FileServer(http.FS(ffs)))
-	// WASM builds are large — serve from the filesystem, not embedded in the binary.
-	r.PathPrefix("/wasm/").Handler(http.StripPrefix("/wasm/", http.FileServer(http.Dir("./app/wasm/"))))
 
 	r.HandleFunc("/home/", Home).Methods(http.MethodGet)
 	r.HandleFunc("/", Index).Methods(http.MethodGet)
@@ -20,6 +18,10 @@ func Router(tm *TopicManager) *mux.Router {
 	r.HandleFunc("/rooms", RoomsLanding).Methods(http.MethodGet)   // create/join page
 	r.HandleFunc("/rooms", CreateRoom).Methods(http.MethodPost)    // generate room code
 	r.HandleFunc("/rooms/{roomID}", Video).Methods(http.MethodGet) // video page for a room
+
+	// How to play the dice games
+	r.HandleFunc("/games/rules", GameRules).Methods(http.MethodGet)
+	r.HandleFunc("/games/rules/{gameID}", GameRules).Methods(http.MethodGet)
 
 	// WebSocket for signaling, scoped to a room
 	r.HandleFunc("/rooms/{roomID}/ws", VideoConnections(tm)).Methods(http.MethodGet)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	"github.com/josephhammerman1979/josephhammerman.com/app/games"
 )
 
 type channelWrapper struct {
@@ -26,6 +27,9 @@ type TopicManager struct {
 	// Slot assignments are append-only for the lifetime of the room: a client
 	// that disconnects and rejoins with the same clientID gets the same slot.
 	roomSlots map[string][]string
+
+	// games runs the dice games played in each room.
+	games *GameHub
 
 	control  chan topicOperation
 	shutdown chan struct{}
@@ -64,6 +68,8 @@ func NewTopicManager() *TopicManager {
 		control:   make(chan topicOperation, controlChannelBuffer),
 		shutdown:  make(chan struct{}),
 	}
+
+	tm.games = newGameHub(tm)
 
 	go tm.run()
 	return tm
@@ -235,6 +241,26 @@ func (tm *TopicManager) assignSlot(roomID, clientID string) (slot int, slots map
 	return slot, slots
 }
 
+// isConnected reports whether userID has an open connection to the room.
+func (tm *TopicManager) isConnected(roomID, userID string) bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.rooms[roomID][userID] > 0
+}
+
+// membersBySlot returns the room's connected members in slot (join) order.
+func (tm *TopicManager) membersBySlot(roomID string) []string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	out := []string{}
+	for _, id := range tm.roomSlots[roomID] {
+		if tm.rooms[roomID][id] > 0 {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // getRoomMembers returns all member IDs in a room excluding the given userID.
 func (tm *TopicManager) getRoomMembers(roomID, excludeID string) []string {
 	tm.mu.Lock()
@@ -283,14 +309,21 @@ type playerLeftMessage struct {
 // signaling message format
 
 type signalMessage struct {
-	Type   string          `json:"type"`   // "offer","answer","candidate","game_start","game_event"…
+	Type   string          `json:"type"`   // "offer","answer","candidate","hello","game_new"…
 	From   string          `json:"from"`   // sender userID
-	To     string          `json:"to"`     // target userID or "room" (broadcast)
+	To     string          `json:"to"`     // target userID, "room" (broadcast) or "server"
 	RoomID string          `json:"roomID"` // room scope
 	SDP    json.RawMessage `json:"sdp,omitempty"`
 	ICE    json.RawMessage `json:"ice,omitempty"`
-	// keep RawMessage so we just relay; clients parse SDP/ICE/Event payloads
-	Event json.RawMessage `json:"event,omitempty"`
+
+	// hello: whether the sender's page has the dice game.
+	Dice bool `json:"dice,omitempty"`
+
+	// Game messages addressed to "server" (see GameHub.handle).
+	GameID  string            `json:"gameId,omitempty"`
+	Options map[string]string `json:"options,omitempty"`
+	Action  *games.Action     `json:"action,omitempty"`
+	Seat    *int              `json:"seat,omitempty"`
 }
 
 func VideoConnections(tm *TopicManager) http.HandlerFunc {
@@ -316,8 +349,9 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 				return
 			}
 			// Notify remaining peers so they can tear down stale WebRTC
-			// connections and dice-game state without waiting for an ICE timeout.
+			// connections without waiting for an ICE timeout.
 			remaining := tm.getRoomMembers(roomID, userID)
+			tm.games.left(roomID, userID, len(remaining) == 0)
 			if len(remaining) == 0 {
 				return
 			}
@@ -393,6 +427,9 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 			}
 		}
 
+		// Send the game catalog and any game in progress.
+		tm.games.joined(roomID, userID)
+
 		// Liveness: every pong (and any other read) extends the read deadline;
 		// a client that stops answering pings fails ReadMessage after pongWait.
 		conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -458,8 +495,15 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 				if sig.RoomID != roomID || sig.From != userID {
 					continue
 				}
+				if sig.To == "server" {
+					tm.games.handle(roomID, userID, &sig)
+					continue
+				}
 				if sig.To != "room" && !validID(sig.To) {
 					continue
+				}
+				if sig.Type == "hello" {
+					tm.games.hello(roomID, userID, sig.Dice)
 				}
 
 				if sig.To == "room" {

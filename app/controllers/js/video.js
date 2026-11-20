@@ -299,8 +299,9 @@ function onWSMessage(evt) {
     return;
   }
 
-  // Dice game coordination messages (broadcast or direct).
-  if (msg.type === "game_start" || msg.type === "game_event" || msg.type === "player_kick") {
+  // Dice game messages from the server (see app/games and games.js).
+  if (msg.type === "game_catalog" || msg.type === "game_state" ||
+      msg.type === "game_none" || msg.type === "game_error") {
     if (typeof handleDiceGameMessage === "function") {
       handleDiceGameMessage(msg);
     }

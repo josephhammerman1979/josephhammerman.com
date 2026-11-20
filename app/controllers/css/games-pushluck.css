@@ -1,0 +1,86 @@
+/* games-pushluck.css — Ten Thousand, Midnight, Sevens Out, Sixteen, Threes
+   (js/games/pushluck.js). */
+
+.pl-turn { font-size: 1.1rem; font-weight: 700; color: var(--g-accent); }
+.pl-turn .note { font-weight: 400; margin-left: 0.4em; }
+
+.pl-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--g-muted);
+}
+.pl-stat { display: inline-flex; flex-direction: column; align-items: flex-start; margin-right: 0.5rem; }
+.pl-status { align-items: flex-end; }
+
+/* Live dice: centred, with room for the big ones. */
+.pl-dice { justify-content: center; min-height: 4.4rem; padding: 0.2rem 0; }
+
+/* Dice already kept / set aside sit in a tray, apart from the live roll. */
+.pl-kept-row,
+.pl-aside {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  background: rgba(128, 192, 255, 0.08);
+  border: 1px dashed #4a6a9a;
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  min-height: 2.6rem;
+}
+.pl-kept-row .pl-label,
+.pl-aside .pl-label { margin-right: 0.3rem; }
+.pl-kept { display: inline-flex; gap: 0.4rem; flex-wrap: wrap; }
+.pl-group { display: inline-flex; align-items: center; gap: 0.2rem; margin-right: 0.4rem; }
+
+/* Sevens Out: dice removed as pairs adding to seven. */
+.pl-gone { display: inline-block; opacity: 0.25; filter: grayscale(1); position: relative; }
+.pl-gone::after {
+  content: "7";
+  position: absolute;
+  right: -0.25rem;
+  top: -0.35rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: var(--g-bad);
+}
+
+/* Sevens Out roll-limit slots. */
+.pl-limit { gap: 0.4rem; }
+.pl-slot {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  border: 2px solid var(--g-accent);
+  color: var(--g-accent);
+}
+.pl-slot.used { background: var(--g-accent); color: #222; }
+.pl-slot.off { border-color: #44446a; color: #44446a; text-decoration: line-through; }
+
+.pl-actions { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.pl-last { gap: 0.35rem; }
+.pl-last.bad { border-left: 4px solid var(--g-bad); }
+.pl-result { gap: 0.35rem; }
+.pl-result.win strong { color: var(--g-good); }
+
+.pl-sixteen { flex: 1 1 8rem; }
+
+/* Midnight / Threes pot. */
+.pl-pot {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  padding: 0.15em 0.7em;
+  border-radius: 12px;
+  background: #1f4a30;
+  color: var(--g-good);
+  font-size: 1rem;
+}
+.pl-pot strong { font-size: 1.4rem; font-family: monospace; }

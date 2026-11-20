@@ -1,0 +1,71 @@
+/* games-bluff.css — styles for the bluff game renderers (js/games/bluff.js):
+   Mia, Perudo and Liar's Poker Dice. */
+
+/* The current claim / bid: big and central. */
+.bluff-claim {
+  align-items: center;
+  text-align: center;
+  border: 2px solid var(--g-accent);
+  background: linear-gradient(180deg, #2c2650 0%, var(--g-raised) 100%);
+  padding: 0.8rem 0.75rem;
+}
+.bluff-claim.dim { border-color: #3c3c66; border-style: dashed; background: var(--g-raised); }
+.bluff-claim-label { color: var(--g-muted); font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.bluff-claim-value {
+  font-size: clamp(1.8rem, 7vw, 2.8rem);
+  font-weight: 800;
+  color: #ffe15a;
+  line-height: 1.1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.bluff-claim.dim .bluff-claim-value { color: #8888bb; font-size: 1.4rem; }
+.bluff-claim-sub { color: var(--g-text); font-size: 0.95rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem; flex-wrap: wrap; }
+.bluff-claim-dice { display: inline-flex; }
+.bluff-count { font-family: monospace; font-size: 1.2em; }
+
+/* My concealed dice. */
+.bluff-secret { border: 2px dashed #a080ff; background: #241c40; }
+.bluff-secret h3 { color: #d8c8ff; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+
+/* The reveal after a challenge. */
+.bluff-reveal { border-left: 5px solid var(--g-good); }
+.bluff-reveal.bluff { border-left-color: var(--g-bad); }
+.bluff-reveal h3 { color: var(--g-text); font-size: 1.05rem; }
+.bluff-reveal-text { font-size: 1.05rem; margin: 0; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.bluff-reveal-row { gap: 0.3rem; }
+.bluff-who { min-width: 6rem; color: var(--g-muted); font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bluff-loser { margin: 0; font-weight: 700; color: var(--g-bad); font-size: 1.05rem; }
+
+.bluff-pips { color: #ff7090; font-size: 1.2rem; letter-spacing: 0.1em; white-space: nowrap; }
+.bluff-table-note { text-align: center; font-size: 1rem; }
+.bluff-help summary { cursor: pointer; color: var(--g-muted); font-size: 0.9rem; }
+.bluff-bid-selects { display: inline-flex; gap: 0.25rem; }
+.bluff-bid-selects select { font-size: 1.1rem; padding: 0.3em 0.2em; }
+
+/* Mid-sized dice in the scoreboard rows of hidden cups. */
+.scoreboard .die.small.hidden { --die-size: 1.3rem; }
+
+/* Of Mice and Men */
+.mice-stake { font-size: 2.4rem; }
+.mice-shown { display: flex; flex-direction: column; gap: 0.35rem; }
+.mice-hand { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.mice-hand .who { min-width: 5rem; font-weight: 600; }
+.mice-hand.lost .who { color: #ff8080; }
+.mice-num { font-family: monospace; font-size: 1.1rem; color: #ffe15a; }
+.progress .mice-bar { background: #ff8080; }
+
+/* Double or Quits */
+.doq-pot { font-size: 2.4rem; }
+.doq-claim { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.doq-claim-name { font-size: 1.8rem; font-weight: 800; color: #ffe15a; }
+.doq-hand { align-items: flex-start; }
+.doq-die { display: inline-flex; flex-direction: column; align-items: center; gap: 0.2rem; }
+.doq-die small { font-size: 0.7rem; color: #a8a8c8; min-height: 1em; }
+.doq-die.exposed small { color: #80c0ff; }
+
+/* Octo */
+.octo-group { margin-right: 0.4rem; }

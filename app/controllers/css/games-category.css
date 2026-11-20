@@ -1,0 +1,24 @@
+/* games-category.css — Catego's score sheet. */
+.catego-wrap { overflow-x: auto; }
+.catego-sheet { min-width: 36rem; }
+.catego-sheet th.catego-col { text-align: center; color: #ffe15a; }
+.catego-cell {
+  text-align: center;
+  font-family: monospace;
+  font-size: 1.05rem;
+  min-width: 2rem;
+}
+.catego-cell.empty { color: #555; }
+.catego-cell.leads {
+  background: rgba(128, 240, 160, 0.18);
+  color: #80f0a0;
+  font-weight: 800;
+}
+.catego-cell.open { padding: 0.15em; }
+.catego-place.btn {
+  min-width: 0;
+  width: 100%;
+  padding: 0.45em 0.2em;
+  background: #2a5a8a;
+}
+.catego-points { font-weight: 800; color: #ffe15a; text-align: center; }

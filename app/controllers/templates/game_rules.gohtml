@@ -1,0 +1,53 @@
+{{ template "base" . }}
+{{ define "head" }}<link rel="stylesheet" href="/css/games.css">{{ end }}
+
+{{ define "main" }}
+<div class="rules-page">
+  <nav class="rules-nav">
+    <a href="/games/rules">All games</a>
+    {{ range .Games }} · <a href="/games/rules/{{ .ID }}"{{ if and $.Game (eq .ID $.Game.ID) }} aria-current="page"{{ end }}>{{ .Name }}</a>{{ end }}
+  </nav>
+
+  {{ with .Game }}
+  <article class="rules-card">
+    <h1>{{ .Name }}</h1>
+    <p class="rules-summary">{{ .Summary }}</p>
+    <dl class="rules-facts">
+      {{ range .Facts }}<div>{{ . }}</div>{{ end }}
+      <div class="rules-online">Play here: {{ template "players" . }}</div>
+    </dl>
+
+    <section>
+      <h2>Quick version</h2>
+      <ul class="rules-quick">{{ range .Rules }}<li>{{ . }}</li>{{ end }}</ul>
+    </section>
+
+    {{ if .Sheet }}
+    <section class="rules-sheet">
+      <h2>From the rules sheet</h2>
+      {{ range .Sheet }}<p>{{ . }}</p>{{ end }}
+      {{ range .Images }}<img src="/css/rules/{{ . }}" alt="{{ $.Game.Name }} board">{{ end }}
+    </section>
+    {{ end }}
+
+    {{ if .RulesURL }}
+    <p><a class="rules-out" href="{{ .RulesURL }}" target="_blank" rel="noopener">Open this game in the rules document ↗</a></p>
+    {{ end }}
+  </article>
+  {{ else }}
+  <h1>Dice games</h1>
+  <p>Play any of these in a dice room. Each page has a quick summary and the full rules from the sheet.</p>
+  <ul class="rules-index">
+    {{ range .Games }}
+    <li class="rules-tile">
+      <a href="/games/rules/{{ .ID }}"><strong>{{ .Name }}</strong></a>
+      <span class="rules-players">{{ template "players" . }}</span>
+      <p>{{ .Summary }}</p>
+    </li>
+    {{ end }}
+  </ul>
+  {{ end }}
+</div>
+{{ end }}
+
+{{ define "players" }}{{ if eq .MinPlayers .MaxPlayers }}{{ .MinPlayers }} players{{ else }}{{ .MinPlayers }}–{{ .MaxPlayers }} players{{ end }}{{ end }}
