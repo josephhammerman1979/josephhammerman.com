@@ -11,6 +11,9 @@ var videoTemplatePath = append([]string{templatePath + "video.gohtml"}, baseTemp
 
 type videoPage struct {
 	RoomID string
+	// IsDice shows the dice-game panel. Dice rooms are created with
+	// ?game=dice, which invite links carry along.
+	IsDice bool
 }
 
 func Video(w http.ResponseWriter, r *http.Request) {
@@ -23,7 +26,7 @@ func Video(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := videoPage{RoomID: roomID}
+	data := videoPage{RoomID: roomID, IsDice: r.URL.Query().Get("game") == "dice"}
 
 	if err := tmpl.Execute(w, data); err != nil {
 		internalError(err, w)

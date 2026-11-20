@@ -9,15 +9,16 @@ function randomID() {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Stable client ID, persisted across reloads so the server can restore the
-// player's slot on refresh/rejoin.
+// Client ID, persisted across reloads of this tab so the server can restore
+// the player's slot on refresh/rejoin.  sessionStorage (not localStorage) so
+// two tabs in the same browser are two distinct participants.
 const CLIENT_ID_STORAGE_KEY = "pig.clientID";
 function getOrCreateClientID() {
   let id = null;
-  try { id = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY); } catch (_) {}
+  try { id = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY); } catch (_) {}
   if (!id || !/^[a-f0-9]{16}$/.test(id)) {
     id = randomID();
-    try { window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, id); } catch (_) {}
+    try { window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, id); } catch (_) {}
   }
   return id;
 }
@@ -25,10 +26,28 @@ const myID = getOrCreateClientID();
 const peers = Object.create(null);
 const pendingPeers = new Set();
 
-// Server-assigned slot info, populated from the "peers" and "player_joined"
-// messages. Read by dice_game.js to determine player ordering.
+// Server-assigned slot info for currently connected members, populated from
+// the "peers" and "player_joined" messages and pruned on "player_left".
+// Read by dice_game.js to determine player ordering.
 let mySlot = -1;
 const playerSlots = Object.create(null);  // clientID -> slot index
+
+// Per-peer details announced via "hello" messages: display name, and
+// whether their page has the dice game loaded (only those join rosters).
+const playerInfo = Object.create(null);   // clientID -> { name, dice }
+
+// Display name, shared across tabs and rooms.
+const DISPLAY_NAME_STORAGE_KEY = "pig.displayName";
+const MAX_NAME_LENGTH = 24;
+let myName = "";
+try { myName = (window.localStorage.getItem(DISPLAY_NAME_STORAGE_KEY) || "").slice(0, MAX_NAME_LENGTH); } catch (_) {}
+
+// Returns the display name for a clientID, or "" if they haven't set one.
+function displayNameFor(clientID) {
+  if (clientID === myID) return myName;
+  const info = playerInfo[clientID];
+  return info && info.name ? info.name : "";
+}
 const wsScheme = window.location.protocol === "https:" ? "wss://" : "ws://";
 const wsURL = wsScheme + window.location.host + "/rooms/" + encodeURIComponent(roomID) + "/ws?userID=" + encodeURIComponent(myID);
 
@@ -99,10 +118,92 @@ document.getElementById("copy-link-btn").addEventListener("click", () => {
 // Resize all videos based on how many are present
 function updateLayout() {
   const grid = document.getElementById("video-grid");
-  const n = grid.querySelectorAll("video").length;
+  const n = grid.querySelectorAll(".video-tile").length;
   const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 }
+
+// ── Video tiles ──────────────────────────────────────────────────────────────
+//
+// Each <video> sits in a .video-tile that also carries a name label and an
+// optional game badge (score) set by dice_game.js.  The local tile is in the
+// template; remote tiles are created on first track.
+
+const localTile = document.querySelector(".video-tile.local");
+if (localTile) localTile.dataset.peerId = myID;
+
+function tileFor(peerID) {
+  return document.querySelector(`.video-tile[data-peer-id="${peerID}"]`);
+}
+
+function createPeerTile(peerID) {
+  const tile = document.createElement("div");
+  tile.className = "video-tile";
+  tile.dataset.peerId = peerID;
+  const video = document.createElement("video");
+  video.autoplay = true;
+  video.playsInline = true;
+  const label = document.createElement("div");
+  label.className = "tile-label";
+  const badge = document.createElement("div");
+  badge.className = "tile-badge";
+  tile.append(video, label, badge);
+  document.getElementById("video-grid").appendChild(tile);
+  refreshTileLabel(peerID);
+  updateLayout();
+  if (typeof onTilesChanged === "function") onTilesChanged();
+  return tile;
+}
+
+function refreshTileLabel(peerID) {
+  const tile = tileFor(peerID);
+  const label = tile && tile.querySelector(".tile-label");
+  if (!label) return;
+  const name = displayNameFor(peerID);
+  if (peerID === myID) label.textContent = name ? `${name} (you)` : "You";
+  else label.textContent = name || "Guest";
+}
+
+// Sets the game badge + turn highlight on each tile.  `info` maps clientID
+// to { badge, turn, out }; tiles not in the map are cleared.
+function setTileGameInfo(info) {
+  document.querySelectorAll(".video-tile").forEach((tile) => {
+    const i = info && info[tile.dataset.peerId];
+    const badge = tile.querySelector(".tile-badge");
+    if (badge) badge.textContent = i && i.badge ? i.badge : "";
+    tile.classList.toggle("has-badge", !!(i && i.badge));
+    tile.classList.toggle("turn", !!(i && i.turn));
+    tile.classList.toggle("out", !!(i && i.out));
+  });
+}
+
+// ── Display name + hello ─────────────────────────────────────────────────────
+
+function sendHello(to) {
+  sendSignal({
+    type:   "hello",
+    from:   myID,
+    to:     to || "room",
+    roomID: roomID,
+    name:   myName,
+    dice:   typeof handleDiceGameMessage === "function",
+  });
+}
+
+(function setupNameInput() {
+  const input = document.getElementById("display-name-input");
+  if (!input) return;
+  input.value = myName;
+  input.addEventListener("change", () => {
+    myName = input.value.trim().slice(0, MAX_NAME_LENGTH);
+    input.value = myName;
+    try { window.localStorage.setItem(DISPLAY_NAME_STORAGE_KEY, myName); } catch (_) {}
+    refreshTileLabel(myID);
+    sendHello("room");
+    if (typeof onPlayerInfoUpdated === "function") onPlayerInfoUpdated();
+  });
+})();
+refreshTileLabel(myID);
 
 function connectWS() {
   ws = new WebSocket(wsURL);
@@ -147,7 +248,19 @@ function onWSMessage(evt) {
         pendingPeers.add(peerID);
       }
     });
+    sendHello("room");
     if (typeof onSlotsUpdated === "function") onSlotsUpdated();
+    return;
+  }
+
+  // A peer announcing (or changing) their display name / dice capability.
+  if (msg.type === "hello") {
+    if (msg.from && msg.from !== myID) {
+      const name = typeof msg.name === "string" ? msg.name.trim().slice(0, MAX_NAME_LENGTH) : "";
+      playerInfo[msg.from] = { name, dice: msg.dice === true };
+      refreshTileLabel(msg.from);
+      if (typeof onPlayerInfoUpdated === "function") onPlayerInfoUpdated();
+    }
     return;
   }
 
@@ -162,14 +275,16 @@ function onWSMessage(evt) {
         delete peers[msg.peerID];
         removePeerVideo(msg.peerID);
       }
+      sendHello(msg.peerID);
       if (typeof onSlotsUpdated === "function") onSlotsUpdated();
       if (typeof onPlayerJoined === "function") onPlayerJoined(msg.peerID);
     }
     return;
   }
 
-  // Server tells us a peer disconnected. Tear down the RTC connection and
-  // notify the dice game so it can end any in-progress session cleanly.
+  // Server tells us a peer disconnected. Tear down the RTC connection, drop
+  // them from the slot map (so new games don't include them) and notify the
+  // dice game.  playerInfo is kept so their name still shows if they return.
   if (msg.type === "player_left") {
     if (msg.peerID) {
       if (peers[msg.peerID]) {
@@ -178,6 +293,8 @@ function onWSMessage(evt) {
       }
       removePeerVideo(msg.peerID);
       if (typeof onPlayerLeft === "function") onPlayerLeft(msg.peerID);
+      delete playerSlots[msg.peerID];
+      if (typeof onSlotsUpdated === "function") onSlotsUpdated();
     }
     return;
   }
@@ -251,10 +368,12 @@ function sendSignal(payload) {
 }
 
 function removePeerVideo(peerID) {
-  const video = document.querySelector(`video[data-peer-id="${peerID}"]`);
-  if (video) {
-    video.srcObject = null;
-    video.remove();
+  if (peerID === myID) return;
+  const tile = tileFor(peerID);
+  if (tile) {
+    const video = tile.querySelector("video");
+    if (video) video.srcObject = null;
+    tile.remove();
     updateLayout();
   }
 }
@@ -277,15 +396,8 @@ function createPeerConnection(peerID) {
   pc.ontrack = (evt) => {
     const stream = evt.streams[0];
     if (!stream) return;
-    let video = document.querySelector(`video[data-peer-id="${peerID}"]`);
-    if (!video) {
-      video = document.createElement("video");
-      video.autoplay = true;
-      video.playsInline = true;
-      video.dataset.peerId = peerID;
-      document.getElementById("video-grid").appendChild(video);
-      updateLayout();
-    }
+    const tile = tileFor(peerID) || createPeerTile(peerID);
+    const video = tile.querySelector("video");
     if (video.srcObject !== stream) {
       video.srcObject = stream;
     }

@@ -35,7 +35,7 @@ func RoomsLanding(w http.ResponseWriter, r *http.Request) {
 //
 // The "type" form value selects the room flavour:
 //   - "video" (default) – plain WebRTC room.
-//   - "dice"            – WebRTC room that auto-starts the dice game on entry.
+//   - "dice"            – WebRTC room with the dice-game panel (?game=dice).
 func CreateRoom(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

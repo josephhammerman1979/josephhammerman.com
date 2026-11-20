@@ -20,8 +20,8 @@ type channelWrapper struct {
 
 type TopicManager struct {
 	topics map[string][]*channelWrapper
-	// roomID -> set of userIDs
-	rooms map[string]map[string]struct{}
+	// roomID -> userID -> number of open connections
+	rooms map[string]map[string]int
 	// roomID -> ordered list of clientIDs; index = player slot.
 	// Slot assignments are append-only for the lifetime of the room: a client
 	// that disconnects and rejoins with the same clientID gets the same slot.
@@ -40,11 +40,16 @@ type topicOperation struct {
 }
 
 const (
-	keepAliveInterval    = 30 * time.Minute
 	messageBufferSize    = 100
 	controlChannelBuffer = 200
 	writeTimeout         = 5 * time.Second
 	maxRoomParticipants  = 10
+
+	// A client that hasn't answered a ping within pongWait is treated as
+	// gone (phone asleep, network dropped) so peers hear player_left
+	// promptly instead of waiting on a dead TCP connection.
+	pongWait   = 60 * time.Second
+	pingPeriod = 25 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
@@ -54,7 +59,7 @@ var upgrader = websocket.Upgrader{
 func NewTopicManager() *TopicManager {
 	tm := &TopicManager{
 		topics:    make(map[string][]*channelWrapper),
-		rooms:     make(map[string]map[string]struct{}),
+		rooms:     make(map[string]map[string]int),
 		roomSlots: make(map[string][]string),
 		control:   make(chan topicOperation, controlChannelBuffer),
 		shutdown:  make(chan struct{}),
@@ -153,39 +158,56 @@ func validID(id string) bool {
 	return idRegexp.MatchString(id)
 }
 
+// addRoomMember registers one connection for userID.  A user may briefly
+// hold two connections (a reconnect that arrives before the server notices
+// the old socket died), so members are reference-counted; count is the
+// number of distinct users.  A user who is already connected is always let
+// back in, even when the room is full.
 func (tm *TopicManager) addRoomMember(roomID, userID string) (ok bool, count int) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
 	members, exists := tm.rooms[roomID]
 	if !exists {
-		members = make(map[string]struct{})
+		members = make(map[string]int)
 		tm.rooms[roomID] = members
 	}
-	if len(members) >= maxRoomParticipants {
+	if members[userID] == 0 && len(members) >= maxRoomParticipants {
 		return false, len(members)
 	}
-	members[userID] = struct{}{}
+	members[userID]++
 	return true, len(members)
 }
 
-func (tm *TopicManager) removeRoomMember(roomID, userID string) {
+// removeRoomMember drops one connection for userID and reports whether it
+// was the user's last one, i.e. whether the user has actually left.  Slot
+// assignments are forgotten once the whole room is empty.
+func (tm *TopicManager) removeRoomMember(roomID, userID string) (left bool) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	if members, exists := tm.rooms[roomID]; exists {
-		delete(members, userID)
-		if len(members) == 0 {
-			delete(tm.rooms, roomID)
-		}
+	members, exists := tm.rooms[roomID]
+	if !exists || members[userID] == 0 {
+		return false
 	}
+	members[userID]--
+	if members[userID] > 0 {
+		return false
+	}
+	delete(members, userID)
+	if len(members) == 0 {
+		delete(tm.rooms, roomID)
+		delete(tm.roomSlots, roomID)
+	}
+	return true
 }
 
 // assignSlot returns the slot index for clientID in the given room, allocating
 // a new slot if this is the first time the clientID has been seen.  Slots are
 // preserved across disconnect/reconnect so that a refresh restores the player
-// to their original slot.  Also returns a snapshot of the full slot map for
-// the room.
+// to their original slot.  Also returns the slot map for the room's currently
+// connected members — departed clients keep their slot server-side but are
+// left out so they don't appear in new game rosters.
 func (tm *TopicManager) assignSlot(roomID, clientID string) (slot int, slots map[string]int) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -203,9 +225,12 @@ func (tm *TopicManager) assignSlot(roomID, clientID string) (slot int, slots map
 		list = append(list, clientID)
 		tm.roomSlots[roomID] = list
 	}
-	slots = make(map[string]int, len(list))
+	members := tm.rooms[roomID]
+	slots = make(map[string]int, len(members))
 	for i, id := range list {
-		slots[id] = i
+		if members[id] > 0 {
+			slots[id] = i
+		}
 	}
 	return slot, slots
 }
@@ -285,7 +310,11 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 			return
 		}
 		defer func() {
-			tm.removeRoomMember(roomID, userID)
+			// If the user still has another connection open (they reconnected
+			// before this one was noticed as dead), they haven't left.
+			if !tm.removeRoomMember(roomID, userID) {
+				return
+			}
 			// Notify remaining peers so they can tear down stale WebRTC
 			// connections and dice-game state without waiting for an ICE timeout.
 			remaining := tm.getRoomMembers(roomID, userID)
@@ -317,7 +346,7 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 
 		log.Printf("[Connection] %s joined room %s", userID, roomID)
 
-		ctx, cancel := context.WithTimeout(r.Context(), keepAliveInterval)
+		ctx, cancel := context.WithCancel(r.Context())
 		defer func() {
 			conn.Close()
 			cancel()
@@ -364,17 +393,36 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 			}
 		}
 
+		// Liveness: every pong (and any other read) extends the read deadline;
+		// a client that stops answering pings fails ReadMessage after pongWait.
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetPongHandler(func(string) error {
+			return conn.SetReadDeadline(time.Now().Add(pongWait))
+		})
+
 		// Write pump
 		go func() {
-			defer cancel()
+			ping := time.NewTicker(pingPeriod)
+			defer func() {
+				ping.Stop()
+				cancel()
+				conn.Close() // unblocks the read pump
+			}()
 			for {
 				select {
-				case msg := <-msgChan:
+				case msg, ok := <-msgChan:
+					if !ok {
+						return
+					}
 					conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 					if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 						if !websocket.IsUnexpectedCloseError(err) {
 							log.Printf("[Write] Closed: %v", err)
 						}
+						return
+					}
+				case <-ping.C:
+					if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeTimeout)); err != nil {
 						return
 					}
 				case <-ctx.Done():
@@ -403,9 +451,11 @@ func VideoConnections(tm *TopicManager) http.HandlerFunc {
 					continue
 				}
 
-				// Basic validation: enforce room + sender ID.
-				// sig.To may be a specific userID or "room" (broadcast to all members).
-				if sig.RoomID != roomID || !validID(sig.From) {
+				// Basic validation: enforce room, and that the sender is who
+				// this connection authenticated as (so nobody can impersonate
+				// the game host).  sig.To may be a specific userID or "room"
+				// (broadcast to all members).
+				if sig.RoomID != roomID || sig.From != userID {
 					continue
 				}
 				if sig.To != "room" && !validID(sig.To) {
