@@ -36,6 +36,60 @@
   box-shadow: 0 2px 12px rgba(0,0,0,0.6);
 }
 
+/* Each video sits in a tile carrying the person's name and, in a dice
+   game, their score; the tile of whoever's turn it is glows. */
+.video-tile {
+  position: relative;
+  border-radius: 6px;
+}
+.video-tile video { display: block; }
+.tile-label,
+.tile-badge {
+  position: absolute;
+  top: 0.4rem;
+  padding: 0.15em 0.55em;
+  border-radius: 4px;
+  background: rgba(10, 10, 25, 0.72);
+  color: #e8e8ff;
+  font-size: 0.85rem;
+  pointer-events: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-label { left: 0.4rem; }
+.tile-badge {
+  right: 0.4rem;
+  display: none;
+  font-family: monospace;
+  color: #ffe15a;
+}
+.video-tile.has-badge .tile-badge { display: block; }
+.video-tile.turn {
+  outline: 3px solid #ffd84a;
+  box-shadow: 0 0 18px 4px rgba(255, 216, 74, 0.55);
+}
+.video-tile.turn .tile-label { background: #ffd84a; color: #1a1a2e; font-weight: 700; }
+.video-tile.out video { filter: grayscale(1) brightness(0.6); }
+
+#display-name-label {
+  color: #c8c8e0;
+  font-size: 0.9em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+#display-name-input {
+  background: #20203a;
+  color: #e8e8ff;
+  border: 1px solid #5050a0;
+  border-radius: 5px;
+  padding: 0.3em 0.5em;
+  font: inherit;
+  width: 10em;
+}
+
 .room-badge {
   font-family: monospace;
   background: #2a2a50;
@@ -232,6 +286,20 @@
   border-color: #408050;
   box-shadow: 0 0 0 1px #408050 inset;
 }
+.game-player-chip.away {
+  border-style: dashed;
+  color: #ff9a6a;
+}
+.game-player-chip .remove-btn {
+  background: #603020;
+  color: #ffd0b0;
+  border: 1px solid #805030;
+  border-radius: 10px;
+  padding: 0 0.5em;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+.game-player-chip .remove-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .game-player-chip.kicked {
   background: #2a1a1a;
   color: #806060;
@@ -305,14 +373,101 @@
   flex-direction: column;
   gap: 0.75rem;
 }
+/* Turn banner: impossible to miss when it's your turn, calm otherwise. */
 #game-state-message {
-  color: #ffe15a;
-  font-size: 1rem;
-  font-weight: 600;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: #20203a;
+  border-left: 6px solid #6070a0;
   line-height: 1.3;
 }
-#game-state-message.theirs    { color: #a0c8ff; }
-#game-state-message.game-over { color: #80f0a0; }
+#turn-banner-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #a0c8ff;
+}
+#turn-banner-detail {
+  font-size: 0.95rem;
+  color: #c8c8e6;
+}
+#game-state-message.mine {
+  background: linear-gradient(135deg, #5a4210 0%, #3a2a08 100%);
+  border-left-color: #ffd84a;
+  animation: your-turn-pulse 1.6s ease-in-out infinite;
+}
+#game-state-message.mine #turn-banner-title { color: #ffe15a; font-size: 1.6rem; letter-spacing: 0.04em; }
+#game-state-message.game-over { border-left-color: #80f0a0; }
+#game-state-message.game-over #turn-banner-title { color: #80f0a0; }
+@keyframes your-turn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 216, 74, 0.0); }
+  50%      { box-shadow: 0 0 16px 2px rgba(255, 216, 74, 0.45); }
+}
+
+/* Big transient "BUST" notice so a lost turn registers before play moves on. */
+#game-state-panel { position: relative; }
+#bust-flash {
+  position: absolute;
+  left: 50%;
+  top: 2.5rem;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: none;
+  padding: 0.5em 1.1em;
+  border-radius: 10px;
+  background: #b02a2a;
+  color: #fff;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.6);
+  pointer-events: none;
+  white-space: nowrap;
+}
+#bust-flash.show {
+  display: block;
+  animation: bust-pop 2s ease-out forwards;
+}
+@keyframes bust-pop {
+  0%   { opacity: 0; transform: translateX(-50%) scale(0.6); }
+  12%  { opacity: 1; transform: translateX(-50%) scale(1.08); }
+  20%  { transform: translateX(-50%) scale(1); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Recent actions, newest first. */
+#game-action-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.88rem;
+  color: #a8a8c8;
+}
+#game-action-log li:first-child { color: #e8e8ff; }
+#game-action-log li.bust { color: #ff9090; }
+#game-action-log li.win  { color: #80f0a0; font-weight: 700; }
+
+#shake-hint {
+  flex-basis: 100%;
+  background: #2a2a50;
+  color: #d0d0f0;
+  border: 1px solid #5050a0;
+  border-radius: 6px;
+  padding: 0.5em 0.75em;
+  font-size: 0.88rem;
+}
+#shake-hint button {
+  margin-left: 0.5em;
+  background: #4a4a90;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.2em 0.7em;
+  cursor: pointer;
+}
 #game-state-dice {
   display: flex;
   align-items: center;
@@ -382,8 +537,28 @@
   color: #c8c8e0;
   font-size: 0.95rem;
 }
+#game-state-scores li { flex-wrap: wrap; position: relative; }
 #game-state-scores li.me       { background: #3a2070; color: #e8d4ff; }
-#game-state-scores li.current  { outline: 2px solid #80c890; }
+#game-state-scores li.current  { outline: 3px solid #ffd84a; }
+#game-state-scores li.away     { opacity: 0.6; }
+#game-state-scores .player-away {
+  font-size: 0.8rem;
+  color: #ff9a6a;
+  font-style: italic;
+}
+/* Progress toward the winning score: solid = banked, striped = at risk. */
+#game-state-scores .score-bar {
+  flex-basis: 100%;
+  height: 5px;
+  border-radius: 3px;
+  background: #14142a;
+  overflow: hidden;
+  display: flex;
+}
+#game-state-scores .score-bar .banked { background: #ffe15a; }
+#game-state-scores .score-bar .at-risk {
+  background: repeating-linear-gradient(45deg, #a0c8ff 0 4px, #6080b0 4px 8px);
+}
 #game-state-scores li.kicked   { opacity: 0.45; text-decoration: line-through; }
 #game-state-scores .player-label { font-weight: 600; }
 #game-state-scores .player-score {
@@ -439,6 +614,8 @@ body.dice-fullscreen #video-root {
 body.dice-fullscreen #video-grid {
   gap: 4px;
 }
+body.dice-fullscreen .tile-label,
+body.dice-fullscreen .tile-badge { font-size: 0.6rem; top: 0.15rem; }
 body.dice-fullscreen #video-grid video {
   border-radius: 4px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.7);
@@ -488,7 +665,7 @@ body.dice-fullscreen #game-state-panel {
   border-radius: 6px;
   gap: 1rem;
 }
-body.dice-fullscreen #game-state-message { font-size: 1.15rem; }
+body.dice-fullscreen #turn-banner-title { font-size: 1.4rem; }
 body.dice-fullscreen .die-face { width: 4rem; height: 4rem; font-size: 2.4rem; }
 body.dice-fullscreen #game-state-die-label { font-size: 1rem; }
 body.dice-fullscreen #game-state-scores li { font-size: 1.05rem; padding: 0.5em 0.75em; }
@@ -510,15 +687,24 @@ body.dice-fullscreen #exit-fullscreen-btn { display: block; }
   <span>Room: <span class="room-badge">{{ .RoomID }}</span></span>
   <button id="copy-link-btn">Copy Link</button>
   <button id="share-sms-btn" class="share-link-btn" type="button">&#128241; Text Invite</button>
+  <label id="display-name-label">
+    Your name
+    <input id="display-name-input" type="text" maxlength="24" placeholder="Add your name" autocomplete="nickname" />
+  </label>
 </div>
 
 <div id="video-root" data-room-id="{{ .RoomID }}">
   <div id="video-grid">
-    <video id="local_video" autoplay controls muted playsinline></video>
-    <!-- remote <video> elements are appended here by video.js -->
+    <div class="video-tile local">
+      <video id="local_video" autoplay controls muted playsinline></video>
+      <div class="tile-label"></div>
+      <div class="tile-badge"></div>
+    </div>
+    <!-- remote .video-tile elements are appended here by video.js -->
   </div>
 </div>
 
+{{ if .IsDice }}
 <!-- ── Dice Game Panel ──────────────────────────────── -->
 <div id="game-panel">
   <h2>&#127922; Dice Game</h2>
@@ -535,6 +721,12 @@ body.dice-fullscreen #exit-fullscreen-btn { display: block; }
     <button id="enter-fullscreen-btn" type="button" style="display:none;">Fullscreen</button>
     <button id="enable-shake-btn" type="button">Enable Shake-to-Roll</button>
     <span id="game-status"></span>
+    <div id="shake-hint" hidden>
+      Firefox uses phone shakes for its own &ldquo;shake to summarize&rdquo;
+      feature. To shake-to-roll here, turn that off in Firefox&rsquo;s
+      settings &mdash; or just tap Roll.
+      <button id="shake-hint-dismiss" type="button">Got it</button>
+    </div>
     <div id="game-player-list"></div>
   </div>
   <div id="game-action-row">
@@ -543,12 +735,17 @@ body.dice-fullscreen #exit-fullscreen-btn { display: block; }
   </div>
   <button id="exit-fullscreen-btn" type="button" title="Show videos">&#9166;</button>
   <div id="game-state-panel" style="display:none;">
-    <div id="game-state-message"></div>
+    <div id="game-state-message">
+      <div id="turn-banner-title"></div>
+      <div id="turn-banner-detail"></div>
+    </div>
+    <div id="bust-flash" aria-live="assertive"></div>
     <div id="game-state-dice">
       <div id="game-state-die-faces"></div>
       <span id="game-state-die-label">Waiting…</span>
     </div>
     <ul id="game-state-scores"></ul>
+    <ol id="game-action-log" aria-live="polite"></ol>
   </div>
   <!-- Ebiten v2 always creates its own <canvas> and appends it to
        document.body at runtime; dice_game.js intercepts that and moves it
@@ -557,7 +754,9 @@ body.dice-fullscreen #exit-fullscreen-btn { display: block; }
   <div id="game-container" style="display:none;"></div>
 </div>
 
-<script src="/js/wasm_exec.js"></script>
+{{ end }}
+
+{{ if .IsDice }}<script src="/js/wasm_exec.js"></script>{{ end }}
 <script type="text/javascript" src="/js/video.js"></script>
-<script type="text/javascript" src="/js/dice_game.js"></script>
+{{ if .IsDice }}<script type="text/javascript" src="/js/dice_game.js"></script>{{ end }}
 {{ end }}

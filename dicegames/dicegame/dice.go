@@ -81,6 +81,20 @@ func (d *Dice) StartRollWithFinal(finalValue int) {
 	d.kickoffSoloBounce()
 }
 
+// Cancel aborts any in-flight roll animation without producing a result and
+// returns the die to its home position.
+func (d *Dice) Cancel() {
+	d.Animating = false
+	d.Settling = false
+	d.settlingTicks = 0
+	d.animationTick = 0
+	d.OffsetX, d.OffsetY = 0, 0
+	if d.bounceConfigured {
+		d.X, d.Y = d.HomeX, d.HomeY
+		d.VX, d.VY = 0, 0
+	}
+}
+
 // kickoffSoloBounce launches the die from its home position with a random
 // horizontal+upward velocity if SetBounceArea has been configured. No-op
 // otherwise — DicePool-managed dice keep their externally-set position.

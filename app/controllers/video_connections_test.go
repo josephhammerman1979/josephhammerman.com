@@ -106,6 +106,26 @@ func TestRoomCapacityLimit(t *testing.T) {
 	if ok {
 		t.Fatalf("expected room full, got ok=true count=%d", count)
 	}
+
+	// A member who is already connected can always open a second connection
+	// (reconnect overlap), even when the room is full.
+	if ok, _ := tm.addRoomMember("fullroom", "a"); !ok {
+		t.Fatal("existing member rejected from full room")
+	}
+}
+
+func TestRemoveRoomMemberCountsConnections(t *testing.T) {
+	tm := NewTopicManager()
+	defer close(tm.shutdown)
+
+	tm.addRoomMember("r", "u1")
+	tm.addRoomMember("r", "u1")
+	if left := tm.removeRoomMember("r", "u1"); left {
+		t.Fatal("first of two connections reported as leaving")
+	}
+	if left := tm.removeRoomMember("r", "u1"); !left {
+		t.Fatal("last connection not reported as leaving")
+	}
 }
 
 func TestRemoveRoomMember(t *testing.T) {
@@ -194,18 +214,150 @@ func newTestServer(t *testing.T) (*httptest.Server, *TopicManager) {
 	return srv, tm
 }
 
-func TestFirstUserReceivesNoPeersMessage(t *testing.T) {
+// readUntilType reads messages until one of the given type arrives, skipping
+// unrelated notifications (peers, player_joined, ...).
+func readUntilType(t *testing.T, conn *websocket.Conn, msgType string, deadline time.Duration) map[string]interface{} {
+	t.Helper()
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		msg := readJSON(t, conn, time.Until(end))
+		if msg["type"] == msgType {
+			return msg
+		}
+	}
+	t.Fatalf("no %q message within %v", msgType, deadline)
+	return nil
+}
+
+// expectNoMessageOfType fails if a message of msgType arrives within wait.
+func expectNoMessageOfType(t *testing.T, conn *websocket.Conn, msgType string, wait time.Duration) {
+	t.Helper()
+	end := time.Now().Add(wait)
+	for {
+		conn.SetReadDeadline(end)
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return // deadline reached
+		}
+		var msg map[string]interface{}
+		if json.Unmarshal(raw, &msg) == nil && msg["type"] == msgType {
+			t.Fatalf("unexpected %s message: %s", msgType, raw)
+		}
+	}
+}
+
+func TestFirstUserReceivesEmptyPeersMessageWithSlot(t *testing.T) {
 	srv, _ := newTestServer(t)
 
 	conn := dialWS(t, srv.URL, "roomAAA1", "useraaa1")
 	defer conn.Close()
 
-	// The first user in a room should not receive any message immediately.
-	conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
-	_, _, err := conn.ReadMessage()
-	if err == nil {
-		t.Fatal("first user should not receive a message on join")
+	msg := readJSON(t, conn, 500*time.Millisecond)
+	if msg["type"] != "peers" {
+		t.Fatalf("expected type=peers, got %v", msg["type"])
 	}
+	if peers, _ := msg["peers"].([]interface{}); len(peers) != 0 {
+		t.Fatalf("expected no peers, got %v", msg["peers"])
+	}
+	if msg["mySlot"] != float64(0) {
+		t.Fatalf("expected mySlot=0, got %v", msg["mySlot"])
+	}
+}
+
+func TestReconnectOverlapDoesNotAnnounceLeave(t *testing.T) {
+	srv, tm := newTestServer(t)
+
+	// Two observers: a websocket can't be read again after a read timeout,
+	// so connA checks for silence and connC checks for the eventual leave.
+	connA := dialWS(t, srv.URL, "roomOVL1", "userovl1")
+	defer connA.Close()
+	connC := dialWS(t, srv.URL, "roomOVL1", "userovl3")
+	defer connC.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	// B connects, then reconnects before its first socket is closed.
+	connB1 := dialWS(t, srv.URL, "roomOVL1", "userovl2")
+	time.Sleep(20 * time.Millisecond)
+	connB2 := dialWS(t, srv.URL, "roomOVL1", "userovl2")
+	defer connB2.Close()
+	time.Sleep(20 * time.Millisecond)
+	connB1.Close()
+
+	expectNoMessageOfType(t, connA, "player_left", 200*time.Millisecond)
+	if members := tm.getRoomMembers("roomOVL1", "userovl1"); len(members) != 2 {
+		t.Fatalf("reconnected user dropped from room: %v", members)
+	}
+
+	// Closing the last connection does announce the leave.
+	connB2.Close()
+	msg := readUntilType(t, connC, "player_left", time.Second)
+	if msg["peerID"] != "userovl2" {
+		t.Fatalf("player_left for %v, want userovl2", msg["peerID"])
+	}
+}
+
+func TestDepartedUserExcludedFromSlots(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	connA := dialWS(t, srv.URL, "roomSLT1", "userslt1")
+	defer connA.Close()
+	time.Sleep(20 * time.Millisecond)
+	connB := dialWS(t, srv.URL, "roomSLT1", "userslt2")
+	time.Sleep(20 * time.Millisecond)
+	connB.Close()
+	_ = readUntilType(t, connA, "player_left", time.Second)
+
+	connC := dialWS(t, srv.URL, "roomSLT1", "userslt3")
+	defer connC.Close()
+	msg := readUntilType(t, connC, "peers", time.Second)
+	slots, _ := msg["slots"].(map[string]interface{})
+	if _, ok := slots["userslt2"]; ok {
+		t.Fatalf("departed user still in slots: %v", slots)
+	}
+	if slots["userslt1"] != float64(0) || slots["userslt3"] != float64(2) {
+		t.Fatalf("unexpected slots: %v", slots)
+	}
+}
+
+func TestSpoofedSenderDropped(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	connA := dialWS(t, srv.URL, "roomSPF1", "userspf1")
+	defer connA.Close()
+	time.Sleep(20 * time.Millisecond)
+	connB := dialWS(t, srv.URL, "roomSPF1", "userspf2")
+	defer connB.Close()
+	_ = readUntilType(t, connA, "player_joined", time.Second)
+
+	spoof, _ := json.Marshal(map[string]interface{}{
+		"type": "player_kick", "from": "userspf1", "to": "room", "roomID": "roomSPF1", "slot": 0,
+	})
+	if err := connB.WriteMessage(websocket.TextMessage, spoof); err != nil {
+		t.Fatalf("B write: %v", err)
+	}
+	expectNoMessageOfType(t, connA, "player_kick", 200*time.Millisecond)
+}
+
+func TestRoomBroadcastReachesOthersOnly(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	connA := dialWS(t, srv.URL, "roomBRC1", "userbrc1")
+	defer connA.Close()
+	time.Sleep(20 * time.Millisecond)
+	connB := dialWS(t, srv.URL, "roomBRC1", "userbrc2")
+	defer connB.Close()
+	_ = readUntilType(t, connA, "player_joined", time.Second)
+	_ = readUntilType(t, connB, "peers", time.Second)
+
+	evt, _ := json.Marshal(map[string]interface{}{
+		"type": "game_event", "from": "userbrc1", "to": "room", "roomID": "roomBRC1",
+		"event": map[string]interface{}{"action": "hold", "playerIdx": 0},
+	})
+	if err := connA.WriteMessage(websocket.TextMessage, evt); err != nil {
+		t.Fatalf("A write: %v", err)
+	}
+	_ = readUntilType(t, connB, "game_event", time.Second)
+	expectNoMessageOfType(t, connA, "game_event", 150*time.Millisecond)
 }
 
 func TestSecondUserReceivesPeersMessage(t *testing.T) {
@@ -260,11 +412,8 @@ func TestSignalingForwardsBetweenPeers(t *testing.T) {
 		t.Fatalf("B write: %v", err)
 	}
 
-	// A should receive the offer.
-	msg := readJSON(t, connA, 500*time.Millisecond)
-	if msg["type"] != "offer" {
-		t.Fatalf("expected offer, got %v", msg["type"])
-	}
+	// A should receive the offer (after its own peers + player_joined notices).
+	msg := readUntilType(t, connA, "offer", 500*time.Millisecond)
 	if msg["from"] != "userccc4" {
 		t.Fatalf("expected from=userccc4, got %v", msg["from"])
 	}

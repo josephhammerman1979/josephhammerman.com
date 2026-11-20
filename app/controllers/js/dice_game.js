@@ -2,8 +2,9 @@
 // Handles WASM loading, player coordination, and game-event routing for
 // the Pig Dice multiplayer mini-game embedded in a WebRTC room.
 //
-// Depends on globals set by video.js:  myID, roomID, peers, sendSignal,
-//                                      mySlot, playerSlots
+// Depends on globals set by video.js:  myID, roomID, sendSignal, ws,
+//                                      mySlot, playerSlots, playerInfo,
+//                                      displayNameFor, setTileGameInfo
 
 // "Running" means a game is in progress in this tab (WASM loaded, we're a
 // participant). "Spectating" means a game is in progress in the room but we
@@ -15,25 +16,80 @@ let diceGameSpectating = false;
 let gameEnded = false;
 
 // The roster is captured at game_start time and frozen for the life of that
-// game. The host's broadcast carries the authoritative list. New peers
+// game. The starter's broadcast carries the authoritative list. New peers
 // joining after that point do not get a slot in this game; they become
 // spectators and wait for the next game_start.
 let gameRoster = [];     // ordered list of clientIDs participating in the current game
-let gameHostID = null;   // clientID of the host (first to send game_start)
+let gameHostID = null;   // clientID of the player who started the game
+let gameStartedAt = 0;   // when we last started a game ourselves (start-race tie-break)
 let myGameSlot = -1;     // our index within gameRoster, or -1 if spectator
 let currentVariant = "pig";    // active game's rules variant ("pig" | "bigpig")
-const kickedSlots = new Set(); // game-roster indices that have been kicked
+const kickedSlots = new Set(); // game-roster indices that have been removed
 
 // kickedClientIDs persists ACROSS rounds for the lifetime of the page —
 // once a player is booted for AFK, they stay out of subsequent automatic
-// rosters even though their server slot is still active. (A page reload
-// clears it, by design: it's session-scoped, not durable punishment.)
+// rosters even though they're still connected. (A page reload clears it, by
+// design: it's session-scoped, not durable punishment.)  Players removed for
+// being disconnected are not added: if they come back they play next round.
 const kickedClientIDs = new Set();
 
-// Build a clientID list ordered by server-assigned slot index. Used to
-// snapshot the roster at game_start time and to render the chip list before
-// a game has started.  Excludes clientIDs in kickedClientIDs so that
-// next-round auto-rosters skip players the host already kicked.
+// clientID -> time (ms) we noticed they disconnected, for roster members
+// who are currently away.  Cleared when they rejoin.
+const disconnectedAt = Object.create(null);
+
+// Snapshot sent by a peer when we (re)join mid-game; applied once the WASM
+// is ready to take it.
+let pendingSnapshot = null;
+
+// Latest state from the WASM, kept so names / connection changes can
+// re-render without waiting for the next game event.
+let lastState = null;
+let lastLoggedSeq = 0;
+const ACTION_LOG_LIMIT = 8;
+
+// Two players clicking Start at nearly the same moment would each adopt the
+// other's game; within this window the lower clientID's game wins instead.
+const START_RACE_MS = 3000;
+
+// Seconds the active player must hold their turn before the host can kick.
+const AFK_THRESHOLD_SEC = 60;
+
+// Seconds a player must be disconnected before others can remove them —
+// long enough to ride out a page refresh.
+const DISCONNECT_GRACE_SEC = 15;
+
+const BASE_TITLE = document.title;
+
+function _esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+function _isConnected(clientID) {
+  return clientID === myID || typeof playerSlots[clientID] === "number";
+}
+
+function _isAway(clientID) {
+  return disconnectedAt[clientID] !== undefined;
+}
+
+function _awaySeconds(clientID) {
+  const t = disconnectedAt[clientID];
+  return t === undefined ? 0 : Math.floor((Date.now() - t) / 1000);
+}
+
+// Name for a roster slot: "You" for us, otherwise the peer's display name
+// or "Player N".
+function _nameForSlot(idx) {
+  if (idx === myGameSlot) return "You";
+  const name = displayNameFor(gameRoster[idx]);
+  return name || `Player ${idx + 1}`;
+}
+
+// Build the list of players for a new game: connected clients that have the
+// dice game loaded, ordered by server-assigned slot.  Excludes clientIDs in
+// kickedClientIDs so that next-round rosters skip players kicked for AFK.
 function _playerListBySlot() {
   const out = [];
   Object.keys(playerSlots).forEach((id) => {
@@ -41,7 +97,26 @@ function _playerListBySlot() {
   });
   return out
     .filter((id) => typeof id === "string")
+    .filter((id) => id === myID || (playerInfo[id] && playerInfo[id].dice))
     .filter((id) => !kickedClientIDs.has(id));
+}
+
+// The player who acts for the game when coordination is needed (AFK kicks,
+// catching up a rejoining player): the starter if they're connected,
+// otherwise the first connected, un-kicked roster member.  Every client
+// computes the same answer from the same membership view.  excludeID lets
+// us ignore a peer who is only just rejoining.
+function _effectiveHostID(excludeID) {
+  if (gameHostID && gameHostID !== excludeID && _isConnected(gameHostID) &&
+      !kickedSlots.has(gameRoster.indexOf(gameHostID))) {
+    return gameHostID;
+  }
+  for (let i = 0; i < gameRoster.length; i++) {
+    const id = gameRoster[i];
+    if (id === excludeID || kickedSlots.has(i)) continue;
+    if (_isConnected(id)) return id;
+  }
+  return null;
 }
 
 // Read the variant picker; default to "pig" if the element is missing or
@@ -56,20 +131,20 @@ function _selectedVariant() {
 
 /**
  * Start a new game session.  Called when the local user clicks the Start button.
- * The caller becomes the host: their snapshot of the current playerSlots is
- * frozen as the game roster, and only they can kick AFK players.  Players
- * already kicked for AFK in a prior round are excluded automatically.
+ * The caller becomes the host: their snapshot of the connected players is
+ * frozen as the game roster.  Players already kicked for AFK in a prior round
+ * are excluded automatically.
  */
 function startDiceGame() {
   if (diceGameRunning || diceGameSpectating) return;
   if (gameEnded) _resetGameState();
 
-  const roster  = _playerListBySlot();   // already filters kickedClientIDs
+  const roster  = _playerListBySlot();
   const variant = _selectedVariant();
   if (roster.length === 0) return;
 
-  // Broadcast roster + variant + host identity so every peer agrees on who
-  // is playing and which ruleset is in effect.
+  // Broadcast roster + variant so every peer agrees on who is playing and
+  // which ruleset is in effect.
   sendSignal({
     type:    "game_start",
     from:    myID,
@@ -79,6 +154,7 @@ function startDiceGame() {
     variant: variant,
   });
 
+  gameStartedAt = Date.now();
   _initDiceGame(roster, myID, variant);
 }
 
@@ -98,6 +174,10 @@ function _initDiceGame(roster, hostID, variant) {
   myGameSlot      = roster.indexOf(myID);
   currentVariant  = variant === "bigpig" ? "bigpig" : "pig";
   kickedSlots.clear();
+  roster.forEach((id) => {
+    if (_isConnected(id)) delete disconnectedAt[id];
+    else if (disconnectedAt[id] === undefined) disconnectedAt[id] = Date.now();
+  });
 
   // Reflect the variant in the picker (visible to the user, disabled while
   // a game is in progress) so spectators see what's running.
@@ -109,7 +189,7 @@ function _initDiceGame(roster, hostID, variant) {
     const startBtn = document.getElementById("start-game-btn");
     const statusEl = document.getElementById("game-status");
     if (startBtn) startBtn.style.display = "none";
-    if (statusEl) statusEl.textContent = "Game in progress — waiting for next round.";
+    if (statusEl) statusEl.textContent = "Game in progress — you'll be in the next round.";
     _updateGamePlayerList(roster, -1);
     _ensureChipTick();
     _syncVariantPicker();
@@ -121,7 +201,7 @@ function _initDiceGame(roster, hostID, variant) {
 
   // Show the canvas panel + state panel + action buttons. Hide Start, but
   // surface the New Game button so the user has an obvious way to restart
-  // mid-round (otherwise auto-start rooms had no findable restart control).
+  // mid-round.
   const container = document.getElementById("game-container");
   const statePanel = document.getElementById("game-state-panel");
   const startBtn  = document.getElementById("start-game-btn");
@@ -139,30 +219,22 @@ function _initDiceGame(roster, hostID, variant) {
   _ensureChipTick();
   _refreshFullscreen();
 
-  // Configuration read by the Go WASM runtime at startup.
-  window.diceGameConfig = {
-    numPlayers:  roster.length,
-    myPlayerIdx: myGameSlot,
-    gameType:    currentVariant,
-  };
-
-  // Called by the Go game whenever the local player takes an action.
+  // Called by the Go game whenever the local player takes an action.  Sent
+  // to the whole room via the server, so it reaches every player whether or
+  // not we have a working video connection to them.
   window.diceGameSendEvent = function(jsonStr) {
-    const event = JSON.parse(jsonStr);
-    // Fan-out: send to every peer individually (server routes by To).
-    Object.keys(peers).forEach(peerID => {
-      sendSignal({
-        type:   "game_event",
-        from:   myID,
-        to:     peerID,
-        roomID: roomID,
-        event:  event,
-      });
+    sendSignal({
+      type:   "game_event",
+      from:   myID,
+      to:     "room",
+      roomID: roomID,
+      event:  JSON.parse(jsonStr),
     });
   };
 
   // If a previous game already loaded the WASM module, reset it in-place
-  // (the Ebiten run loop is still alive). Otherwise instantiate fresh.
+  // (the Ebiten run loop is still alive). Otherwise instantiate fresh with
+  // the configuration the Go runtime reads at startup.
   if (typeof window.diceGameReset === "function") {
     window.diceGameReset(roster.length, myGameSlot, currentVariant);
   } else {
@@ -184,7 +256,7 @@ function _syncVariantPicker() {
   if (currentVariant === "bigpig" || currentVariant === "pig") {
     sel.value = currentVariant;
   }
-  sel.disabled = diceGameRunning || diceGameSpectating;
+  sel.disabled = (diceGameRunning && !gameEnded) || diceGameSpectating;
 }
 
 // Clear all per-game state in preparation for a fresh round.  Does not
@@ -201,6 +273,9 @@ function _resetGameState() {
   currentTurnIdx          = -1;
   turnStartedAt           = 0;
   userRequestedFullscreen = false;
+  pendingSnapshot         = null;
+  lastState               = null;
+  lastLoggedSeq           = 0;
   kickedSlots.clear();
   if (chipTickHandle) { clearInterval(chipTickHandle); chipTickHandle = null; }
 
@@ -209,11 +284,15 @@ function _resetGameState() {
   const actionRow  = document.getElementById("game-action-row");
   const statePanel = document.getElementById("game-state-panel");
   const enterFsBtn = document.getElementById("enter-fullscreen-btn");
+  const logEl      = document.getElementById("game-action-log");
   if (newGameBtn) newGameBtn.style.display = "none";
   if (statusEl)   statusEl.textContent = "";
   if (actionRow)  actionRow.classList.remove("active");
   if (statePanel) statePanel.style.display = "none";
   if (enterFsBtn) enterFsBtn.style.display = "none";
+  if (logEl)      logEl.innerHTML = "";
+  document.title = BASE_TITLE;
+  setTileGameInfo({});
   _syncVariantPicker();
   _refreshFullscreen();
 }
@@ -269,7 +348,8 @@ function _setupActionButtons() {
 function _refreshActionButtons() {
   const rollBtn = document.getElementById("roll-btn");
   const holdBtn = document.getElementById("hold-btn");
-  const myTurn = diceGameRunning && currentTurnIdx === myGameSlot;
+  const myTurn = diceGameRunning && !gameEnded && currentTurnIdx === myGameSlot &&
+                 !kickedSlots.has(myGameSlot);
   if (rollBtn) rollBtn.disabled = !myTurn;
   if (holdBtn) holdBtn.disabled = !myTurn;
 }
@@ -283,48 +363,94 @@ window.diceGameOnGameOver = function(_winnerIdx) {
   if (newGameBtn) newGameBtn.style.display = "inline-block";
   // Let the picker re-enable so the user can choose a different variant for
   // the next round.  The new game won't start until they click New Game.
-  const sel = document.getElementById("game-variant");
-  if (sel) sel.disabled = false;
+  _syncVariantPicker();
+  _refreshActionButtons();
+  document.title = BASE_TITLE;
   _refreshFullscreen();
 };
 
 // Called by the WASM whenever any scoring / turn / message state changes.
-// Paints the DOM state panel — which is the source of truth for mobile
-// fullscreen mode (where the canvas is hidden) and a redundancy on desktop
-// so the player never has to squint at the canvas to read their score.
 window.diceGameOnStateChange = function(jsonStr) {
   let state;
   try { state = JSON.parse(jsonStr); } catch (_) { return; }
   _renderStatePanel(state);
 };
 
-function _renderStatePanel(state) {
-  const panel    = document.getElementById("game-state-panel");
-  const msgEl    = document.getElementById("game-state-message");
+// ── State panel: turn banner, dice, scores, action log ───────────────────────
+
+function _formatAction(a) {
+  const who  = _nameForSlot(a.playerIdx);
+  const dice = Array.isArray(a.dice) ? a.dice.join(" + ") : "";
+  switch (a.kind) {
+    case "roll":
+      return a.note
+        ? `${who} rolled ${dice} — ${a.note} +${a.points} (turn ${a.turnTotal})`
+        : `${who} rolled ${dice}: +${a.points} (turn ${a.turnTotal})`;
+    case "bust":
+      return `${who} rolled ${dice} — BUST, lost ${a.points}`;
+    case "hold":
+      return `${who} held +${a.points} → ${a.total}`;
+    case "win":
+      return `${who} held +${a.points} → ${a.total} and won!`;
+    case "kick":
+      return `${who} ${a.playerIdx === myGameSlot ? "were" : "was"} removed from the game`;
+  }
+  return "";
+}
+
+function _renderBanner(state) {
+  const banner = document.getElementById("game-state-message");
+  const title  = document.getElementById("turn-banner-title");
+  const detail = document.getElementById("turn-banner-detail");
+  if (!banner || !title || !detail) return;
+
+  const players = Array.isArray(state.players) ? state.players : [];
+  const cur     = players[state.currentIndex] || { turnScore: 0 };
+  const mine    = !state.gameOver && state.currentIndex === myGameSlot;
+  banner.classList.toggle("mine", mine);
+  banner.classList.toggle("game-over", !!state.gameOver);
+
+  if (state.gameOver) {
+    const winnerIdx = state.winnerID - 1;
+    const winner = players[winnerIdx];
+    if (winnerIdx < 0 || !winner) {
+      title.textContent  = "Game over";
+      detail.textContent = "Every player was removed.";
+    } else {
+      title.textContent  = winnerIdx === myGameSlot ? "🏆 You win!" : `🏆 ${_nameForSlot(winnerIdx)} wins!`;
+      detail.textContent = `${winner.totalScore} points. Press New Game to play again.`;
+    }
+    return;
+  }
+
+  if (mine) {
+    title.textContent = "YOUR TURN";
+    if (state.rolling)           detail.textContent = "Rolling…";
+    else if (cur.turnScore > 0)  detail.textContent = `${cur.turnScore} points at risk — Roll again or Hold`;
+    else                         detail.textContent = "Roll to start your turn";
+    return;
+  }
+
+  title.textContent = `${_nameForSlot(state.currentIndex)}'s turn`;
+  if (_isAway(gameRoster[state.currentIndex])) {
+    detail.textContent = "Disconnected — waiting for them to come back";
+  } else if (state.rolling) {
+    detail.textContent = "Rolling…";
+  } else if (cur.turnScore > 0) {
+    detail.textContent = `${cur.turnScore} points at risk`;
+  } else {
+    detail.textContent = "Waiting for them to roll";
+  }
+}
+
+function _renderDice(state) {
   const facesEl  = document.getElementById("game-state-die-faces");
   const dieLabel = document.getElementById("game-state-die-label");
-  const scoresEl = document.getElementById("game-state-scores");
-  if (!panel || !msgEl || !facesEl || !dieLabel || !scoresEl) return;
-
-  if (panel.style.display === "none" || panel.style.display === "") {
-    panel.style.display = "flex";
-  }
-
-  msgEl.textContent = state.message || "";
-  msgEl.classList.remove("theirs", "game-over");
-  if (state.gameOver) {
-    msgEl.classList.add("game-over");
-  } else if (typeof state.currentIndex === "number" &&
-             typeof state.myPlayerIdx === "number" &&
-             state.currentIndex !== state.myPlayerIdx) {
-    msgEl.classList.add("theirs");
-  }
+  if (!facesEl || !dieLabel) return;
 
   // Render one die face per dieValues entry.  For BigPig that's two faces;
   // for Pig it's one. While rolling, faces show the dice emoji.
   const rawVals = Array.isArray(state.dieValues) ? state.dieValues : [];
-  // Ensure at least 1 face when we know the variant but the array is empty
-  // (initial render before WASM fires its first state event).
   const slots = Math.max(1, rawVals.length);
   const facesHTML = [];
   for (let i = 0; i < slots; i++) {
@@ -334,36 +460,118 @@ function _renderStatePanel(state) {
   }
   facesEl.innerHTML = facesHTML.join("");
 
+  const a = state.lastAction || {};
   if (state.rolling) {
     dieLabel.textContent = "Rolling…";
-  } else if (rawVals.length === 2 && rawVals[0] > 0 && rawVals[1] > 0) {
-    dieLabel.textContent =
-      `Last roll: ${rawVals[0]} + ${rawVals[1]} = ${rawVals[0] + rawVals[1]}`;
-  } else if (rawVals.length >= 1 && rawVals[0] > 0) {
-    dieLabel.textContent = "Last roll: " + rawVals[0];
+  } else if (a.seq && (a.kind === "roll" || a.kind === "bust")) {
+    dieLabel.textContent = `${_nameForSlot(a.playerIdx)}: ${(a.dice || []).join(" + ")}`;
   } else {
     dieLabel.textContent = "Waiting for a roll…";
   }
+}
 
+function _renderScores(state) {
+  const scoresEl = document.getElementById("game-state-scores");
+  if (!scoresEl) return;
+  const goal = state.winningScore || 100;
   const players = Array.isArray(state.players) ? state.players : [];
   scoresEl.innerHTML = players.map((p, idx) => {
-    const isMe      = idx === state.myPlayerIdx;
+    const isMe      = idx === myGameSlot;
     const isCurrent = idx === state.currentIndex && !p.kicked && !state.gameOver;
+    const away      = !p.kicked && _isAway(gameRoster[idx]);
     const classes = [];
     if (isMe)      classes.push("me");
     if (isCurrent) classes.push("current");
     if (p.kicked)  classes.push("kicked");
-    const label = isMe ? `You (P${p.id})` : `Player ${p.id}`;
-    const kickedMark = p.kicked ? " (kicked)" : "";
+    if (away)      classes.push("away");
+    const label = isMe
+      ? (displayNameFor(myID) ? `You (${_esc(displayNameFor(myID))})` : "You")
+      : _esc(_nameForSlot(idx));
+    const tag = p.kicked ? " (removed)"
+              : away     ? ` <span class="player-away">disconnected</span>`
+              : "";
     const turn = (!p.kicked && p.turnScore > 0)
-      ? `<span class="player-turn">turn +${p.turnScore}</span>`
+      ? `<span class="player-turn">+${p.turnScore} at risk</span>`
       : "";
+    const banked = Math.min(100, (p.totalScore / goal) * 100);
+    const risk   = Math.min(100 - banked, (p.turnScore / goal) * 100);
     return `<li class="${classes.join(" ")}">`
-         +   `<span class="player-label">${label}${kickedMark}</span>`
+         +   `<span class="player-label">${label}${tag}</span>`
          +   turn
-         +   `<span class="player-score">${p.totalScore} pts</span>`
+         +   `<span class="player-score">${p.totalScore} / ${goal}</span>`
+         +   `<span class="score-bar"><span class="banked" style="width:${banked}%"></span>`
+         +     `<span class="at-risk" style="width:${risk}%"></span></span>`
          + `</li>`;
   }).join("");
+}
+
+function _flashBust(a) {
+  const el = document.getElementById("bust-flash");
+  if (!el) return;
+  el.textContent = a.playerIdx === myGameSlot
+    ? (a.points > 0 ? `BUST! You lost ${a.points}` : "BUST!")
+    : `${_nameForSlot(a.playerIdx)} BUST${a.points > 0 ? ` −${a.points}` : ""}`;
+  el.classList.remove("show");
+  void el.offsetWidth; // restart the animation
+  el.classList.add("show");
+}
+
+function _logAction(state) {
+  const a = state.lastAction;
+  if (!a || !a.seq || a.seq <= lastLoggedSeq) return;
+  const jumped = a.seq > lastLoggedSeq + 1 && lastLoggedSeq > 0;
+  lastLoggedSeq = a.seq;
+
+  const logEl = document.getElementById("game-action-log");
+  if (logEl) {
+    const li = document.createElement("li");
+    li.textContent = _formatAction(a);
+    if (a.kind === "bust") li.className = "bust";
+    if (a.kind === "win")  li.className = "win";
+    logEl.prepend(li);
+    while (logEl.children.length > ACTION_LOG_LIMIT) logEl.lastChild.remove();
+  }
+  // Only flash live busts, not ones we skipped past when catching up.
+  if (a.kind === "bust" && !jumped) _flashBust(a);
+}
+
+// Score badges and turn highlight on the video tiles.
+function _renderTiles(state) {
+  const info = {};
+  const players = state && Array.isArray(state.players) ? state.players : [];
+  players.forEach((p, idx) => {
+    const id = gameRoster[idx];
+    if (!id) return;
+    const turnBit = !p.kicked && p.turnScore > 0 ? ` (+${p.turnScore})` : "";
+    info[id] = {
+      badge: p.kicked ? "out" : `${p.totalScore}${turnBit}`,
+      turn:  !state.gameOver && idx === state.currentIndex && !p.kicked,
+      out:   p.kicked,
+    };
+  });
+  setTileGameInfo(info);
+}
+
+function _renderStatePanel(state) {
+  const panel = document.getElementById("game-state-panel");
+  if (!panel) return;
+  if (panel.style.display === "none" || panel.style.display === "") {
+    panel.style.display = "flex";
+  }
+  lastState = state;
+  _renderBanner(state);
+  _renderDice(state);
+  _renderScores(state);
+  _logAction(state);
+  _renderTiles(state);
+  // A snapshot loaded before the game-over callback was wired up.
+  if (state.gameOver && !gameEnded) window.diceGameOnGameOver(state.winnerID - 1);
+}
+
+function _rerender() {
+  if (lastState) _renderStatePanel(lastState);
+  if (gameRoster.length) _updateGamePlayerList(gameRoster, myGameSlot);
+  else _updateGamePlayerList(_playerListBySlot(), _playerListBySlot().indexOf(myID));
 }
 
 // Pre-WASM placeholder render so the panel shows player slots immediately
@@ -375,14 +583,13 @@ function _renderStatePanelFromRoster() {
     variant:      currentVariant,
     currentIndex: 0,
     myPlayerIdx:  myGameSlot,
-    message:      myGameSlot === 0
-      ? "Your turn — press Roll to begin"
-      : "Waiting for Player 1 to roll…",
-    gameOver:  false,
-    winnerID:  0,
-    dieValues: new Array(numDice).fill(0),
-    rolling:   false,
-    players:   gameRoster.map((_, i) => ({
+    gameOver:     false,
+    winnerID:     0,
+    winningScore: 100,
+    dieValues:    new Array(numDice).fill(0),
+    rolling:      false,
+    lastAction:   { seq: 0 },
+    players:      gameRoster.map((_, i) => ({
       id:         i + 1,
       totalScore: 0,
       turnScore:  0,
@@ -391,18 +598,27 @@ function _renderStatePanelFromRoster() {
   });
 }
 
+// Apply a snapshot from a peer if the WASM is ready for it.
+function _applyPendingSnapshot() {
+  if (!pendingSnapshot || typeof window.diceGameLoadState !== "function") return;
+  const snap = pendingSnapshot;
+  pendingSnapshot = null;
+  window.diceGameLoadState(snap);
+}
+
 // Called by the WASM whenever the current player changes (also once at game
 // start with the initial CurrentIndex).  Tracks the value, resets the AFK
-// timer, updates the Roll/Hold enabled-state, and drives the mobile
-// fullscreen takeover.
+// timer, updates the Roll/Hold enabled-state, and drives the turn alerts and
+// the mobile fullscreen takeover.
 //
 // The first call also doubles as our "WASM is ready" signal: at that point
-// window.diceGameKick exists, so we can replay any kicks that arrived via
-// the catch-up game_start (e.g. a refreshed mid-game rejoin).
+// window.diceGameLoadState and window.diceGameKick exist, so we can apply
+// the live state a peer sent us (a refreshed mid-game rejoin).
 let wasmReady = false;
 window.diceGameOnTurnChange = function(currentIdx) {
   if (!wasmReady) {
     wasmReady = true;
+    _applyPendingSnapshot();
     if (kickedSlots.size && typeof window.diceGameKick === "function") {
       kickedSlots.forEach((slot) => window.diceGameKick(slot));
     }
@@ -414,21 +630,24 @@ window.diceGameOnTurnChange = function(currentIdx) {
   // Re-render chips so the previous timer disappears and the new current
   // chip's timer + (potential) kick button appear immediately.
   if (gameRoster.length) _updateGamePlayerList(gameRoster, myGameSlot);
-  // Reset the user-minimised opt-out when the turn comes back to us — they
-  // probably want the fullscreen takeover next time even if they dismissed
-  // it last turn.
-  if (currentIdx === myGameSlot && previous !== myGameSlot) {
+
+  const myTurnNow = currentIdx === myGameSlot && !gameEnded;
+  if (myTurnNow && previous !== myGameSlot) {
+    // Reset the user-minimised opt-out — they probably want the fullscreen
+    // takeover this turn even if they dismissed it last turn.
     userMinimizedFullscreen = false;
+    if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
   }
+  document.title = myTurnNow ? "🎲 Your turn! — " + BASE_TITLE : BASE_TITLE;
   _refreshFullscreen();
 };
 
 // ── Mobile fullscreen takeover ───────────────────────────────────────────────
 //
 // When it's the local player's turn on a narrow viewport, take over the
-// screen so the canvas + Roll/Hold buttons are big and thumb-reachable; the
-// video grid collapses to a PIP overlay. The user can opt out for the rest
-// of the current turn via the exit button.
+// screen so the state panel + Roll/Hold buttons are big and thumb-reachable;
+// the video grid collapses to a PIP overlay. The user can opt out for the
+// rest of the current turn via the exit button.
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 768px)";
 let userMinimizedFullscreen = false;
@@ -440,7 +659,7 @@ let userRequestedFullscreen = false;
 function _refreshFullscreen() {
   const narrow  = window.matchMedia(NARROW_VIEWPORT_QUERY).matches;
   const inGame  = diceGameRunning || diceGameSpectating;
-  const autoOn  = diceGameRunning && currentTurnIdx === myGameSlot && !userMinimizedFullscreen;
+  const autoOn  = diceGameRunning && !gameEnded && currentTurnIdx === myGameSlot && !userMinimizedFullscreen;
   const wantFullscreen = inGame && narrow && (autoOn || userRequestedFullscreen);
   document.body.classList.toggle("dice-fullscreen", wantFullscreen);
 
@@ -520,8 +739,7 @@ function _captureEbitenCanvas() {
   if (!container) return;
 
   // Note any canvases that exist before WASM runs so we can distinguish
-  // Ebiten's new one from anything we already had on the page (videos,
-  // etc. are not canvases — but the picker is defensive anyway).
+  // Ebiten's new one from anything we already had on the page.
   const preExisting = new Set(document.querySelectorAll("canvas"));
 
   const reparent = (canvas) => {
@@ -592,24 +810,38 @@ function _restoreBodyStyles() {
  */
 function handleDiceGameMessage(msg) {
   switch (msg.type) {
-    case "game_start":
+    case "game_start": {
       if (!Array.isArray(msg.roster)) break;
-      // Accept any game_start broadcast — it's a unilateral restart. If we
-      // were already running we treat it as a peer-initiated restart and
-      // drop our local state first. (Restart was previously ignored mid-
-      // round, which made the New Game button useless for everyone except
-      // the clicker.)
+      // A unicast game_start is a catch-up for us after (re)joining; a room
+      // broadcast is someone starting a new game.
+      const catchUp = msg.to === myID;
+
+      // Simultaneous Start clicks: keep the game of the lower clientID so
+      // both sides converge on the same game and host.
+      if (!catchUp && diceGameRunning && gameHostID === myID &&
+          Date.now() - gameStartedAt < START_RACE_MS && msg.from > myID) {
+        break;
+      }
+
+      // Accept any other game_start — it's a unilateral restart. If we were
+      // already running we drop our local state first.
       if (diceGameRunning || diceGameSpectating || gameEnded) {
         _resetGameState();
       }
-      _initDiceGame(msg.roster, msg.from, msg.variant);
-      // Replay any kicks the host already applied so a refreshed-mid-game
-      // rejoin comes back to the same logical state.
+      _initDiceGame(msg.roster, catchUp && msg.host ? msg.host : msg.from, msg.variant);
+
+      // Replay removals already applied so a rejoin comes back to the same
+      // logical state, then adopt the live scores / turn.
       if (Array.isArray(msg.kicked)) {
-        msg.kicked.forEach((slot) => _applyKick(slot, msg.from));
+        msg.kicked.forEach((slot) => _markKicked(slot, null));
+      }
+      if (catchUp && typeof msg.state === "string" && diceGameRunning) {
+        pendingSnapshot = msg.state;
+        if (wasmReady) _applyPendingSnapshot();
       }
       _ensureChipTick();
       break;
+    }
 
     case "game_event":
       if (diceGameRunning && msg.event) {
@@ -623,56 +855,83 @@ function handleDiceGameMessage(msg) {
 
     case "player_kick":
       if (typeof msg.slot === "number") {
-        _applyKick(msg.slot, msg.from);
+        _applyKick(msg.slot, msg.from, msg.reason);
       }
       break;
   }
 }
 
-// Called by video.js whenever the server-assigned slot map changes (either
-// the initial "peers" message or a subsequent "player_joined").  Keeps the
-// pre-game chip list in sync; once a game starts the roster is frozen so we
-// leave the chips alone.
+// Called by video.js whenever the slot map changes ("peers", "player_joined"
+// or "player_left").  Keeps the pre-game chip list in sync and notices roster
+// members who left while our own connection was down.
 function onSlotsUpdated() {
   const statusEl = document.getElementById("game-status");
   if (statusEl && statusEl.textContent === "Reconnecting…") {
     statusEl.textContent = "";
   }
-  if (!diceGameRunning && !diceGameSpectating) {
-    _updateGamePlayerList(_playerListBySlot(), mySlot);
-  }
+  const online = ws && ws.readyState === WebSocket.OPEN;
+  gameRoster.forEach((id) => {
+    if (_isConnected(id)) delete disconnectedAt[id];
+    else if (online && disconnectedAt[id] === undefined) disconnectedAt[id] = Date.now();
+  });
+  _rerender();
 }
 
-// Called by video.js when a brand-new peer arrives (player_joined). If we
-// are the host of an active game, send them a unicast game_start carrying
-// both the frozen roster and the set of already-kicked slots, so a
-// returning player rebuilds their WASM with the correct state and a fresh
-// joiner drops into spectator mode. Without this catch-up, late joiners
-// would think no game was running and could trigger a competing game_start.
+// Called by video.js when a peer's display name / capabilities change.
+function onPlayerInfoUpdated() {
+  _rerender();
+}
+
+// Called by video.js when a video tile is added, so it picks up its badge.
+function onTilesChanged() {
+  if (lastState) _renderTiles(lastState);
+}
+
+// Called by video.js when a peer arrives (player_joined). If a game is
+// running and we're the one coordinating it, send them a unicast game_start
+// carrying the frozen roster, removals and live state, so a returning player
+// resumes the actual game and a fresh joiner drops into spectator mode.
+// Without this catch-up, late joiners would think no game was running and
+// could trigger a competing game_start.
 function onPlayerJoined(peerID) {
   if (!peerID) return;
-  if ((diceGameRunning || diceGameSpectating) && gameHostID === myID && gameRoster.length) {
-    sendSignal({
-      type:    "game_start",
-      from:    myID,
-      to:      peerID,
-      roomID:  roomID,
-      roster:  gameRoster,
-      kicked:  Array.from(kickedSlots),
-      variant: currentVariant,
-    });
+  delete disconnectedAt[peerID];
+  const statusEl = document.getElementById("game-status");
+  if (statusEl && statusEl.dataset.awayFor === peerID) {
+    statusEl.textContent = "";
+    delete statusEl.dataset.awayFor;
   }
+  if (!(diceGameRunning || diceGameSpectating) || !gameRoster.length) return;
+  if (_effectiveHostID(peerID) !== myID) return;
+
+  const msg = {
+    type:    "game_start",
+    from:    myID,
+    to:      peerID,
+    roomID:  roomID,
+    roster:  gameRoster,
+    host:    gameHostID,
+    kicked:  Array.from(kickedSlots),
+    variant: currentVariant,
+  };
+  if (diceGameRunning && typeof window.diceGameGetState === "function") {
+    msg.state = window.diceGameGetState();
+  }
+  sendSignal(msg);
 }
 
-// Called by video.js when a peer disconnects. The server preserves their
-// slot for rejoin; we surface a status so the local user knows the game is
-// effectively paused.
+// Called by video.js when a peer disconnects. Their chip shows them as away;
+// after DISCONNECT_GRACE_SEC any player can remove them from the game.
 function onPlayerLeft(peerID) {
+  const slot = gameRoster.indexOf(peerID);
+  if (slot < 0 || kickedSlots.has(slot)) return;
+  disconnectedAt[peerID] = Date.now();
   const statusEl = document.getElementById("game-status");
-  if (!statusEl) return;
-  const slot = playerSlots[peerID];
-  const label = typeof slot === "number" ? `Player ${slot + 1}` : "A player";
-  statusEl.textContent = `${label} disconnected — waiting for rejoin…`;
+  if (statusEl && diceGameRunning && !gameEnded) {
+    statusEl.textContent = `${_nameForSlot(slot)} disconnected — you can remove them ` +
+                           `if they're not back in ${DISCONNECT_GRACE_SEC}s.`;
+    statusEl.dataset.awayFor = peerID;
+  }
 }
 
 // Called by video.js when the local WebSocket drops (network blip, server
@@ -682,17 +941,14 @@ function onWSDisconnected() {
   if (statusEl) statusEl.textContent = "Reconnecting…";
 }
 
-// ── UI helpers ────────────────────────────────────────────────────────────────
-
-// Seconds the active player must hold their turn before the host can kick.
-const AFK_THRESHOLD_SEC = 60;
+// ── Player chips ─────────────────────────────────────────────────────────────
 
 // Set on every turn change so the chip render can show "0:XX on turn" and
 // gate the host's Kick button on AFK_THRESHOLD_SEC.
 let turnStartedAt = 0;
 
 // Interval handle for the once-per-second chip re-render while a game is
-// active (so the turn timer + kick enable update visually).
+// active (so the turn timer + remove buttons update visually).
 let chipTickHandle = null;
 
 function _formatElapsed(secs) {
@@ -706,51 +962,65 @@ function _updateGamePlayerList(players, myPlayerIdx) {
   if (!listEl) return;
 
   const inGame   = diceGameRunning || diceGameSpectating;
-  const amHost   = inGame && gameHostID === myID;
+  const live     = diceGameRunning && !gameEnded && !kickedSlots.has(myGameSlot);
+  const amHost   = live && _effectiveHostID() === myID;
   const elapsed  = turnStartedAt ? Math.max(0, Math.floor((Date.now() - turnStartedAt) / 1000)) : 0;
 
   listEl.innerHTML = players.map((id, idx) => {
     const isMe      = idx === myPlayerIdx;
-    const isKicked  = kickedSlots.has(idx);
+    const isKicked  = inGame && kickedSlots.has(idx);
     const isCurrent = inGame && idx === currentTurnIdx && !isKicked;
+    const away      = inGame && !isKicked && _isAway(id);
 
     const classes = ["game-player-chip"];
     if (isMe)      classes.push("me");
     if (isKicked)  classes.push("kicked");
     if (isCurrent) classes.push("current");
+    if (away)      classes.push("away");
 
-    let label = isMe ? `<strong>You (P${idx + 1})</strong>` : `Player ${idx + 1}`;
-    if (isKicked) label += " <em>(kicked)</em>";
+    const name = displayNameFor(id);
+    let label = isMe
+      ? `<strong>You${name ? ` (${_esc(name)})` : ""}</strong>`
+      : _esc(name || `Player ${idx + 1}`);
+    if (isKicked) label += " <em>(removed)</em>";
+    if (away)     label += " <em>disconnected</em>";
 
     let extras = "";
-    if (isCurrent) {
+    if (isCurrent && !gameEnded) {
       extras += `<span class="turn-timer">${_formatElapsed(elapsed)}</span>`;
     }
-    if (amHost && !isMe && !isKicked) {
-      // Only enable kick on the player who is currently holding the turn
-      // past the AFK threshold — host can't pre-emptively boot.
-      const canKick = isCurrent && elapsed >= AFK_THRESHOLD_SEC;
-      const title = canKick
-        ? "Kick AFK player"
-        : `Available after ${AFK_THRESHOLD_SEC}s of inactivity`;
-      extras += `<button class="kick-btn" data-slot="${idx}"`
-              + `${canKick ? "" : " disabled"} title="${title}">&times;</button>`;
+    if (live && !isMe && !isKicked) {
+      if (away) {
+        // Anyone still playing can remove a player who has been gone a while.
+        const wait = DISCONNECT_GRACE_SEC - _awaySeconds(id);
+        extras += wait > 0
+          ? `<button class="remove-btn" disabled title="They may be refreshing">Remove in ${wait}s</button>`
+          : `<button class="remove-btn" data-slot="${idx}" data-reason="disconnected">Remove</button>`;
+      } else if (amHost) {
+        // AFK: only on the player holding the turn past the threshold.
+        const canKick = isCurrent && elapsed >= AFK_THRESHOLD_SEC;
+        const title = canKick
+          ? "Remove AFK player"
+          : `Available once it's their turn and they've been idle ${AFK_THRESHOLD_SEC}s`;
+        extras += `<button class="kick-btn" data-slot="${idx}" data-reason="afk"`
+                + `${canKick ? "" : " disabled"} title="${title}">&times;</button>`;
+      }
     }
 
     return `<span class="${classes.join(" ")}">${label}${extras}</span>`;
   }).join("");
 
-  // Re-wire kick buttons after each render.
-  listEl.querySelectorAll(".kick-btn").forEach((btn) => {
+  // Re-wire remove buttons after each render.
+  listEl.querySelectorAll("button[data-slot]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const slot = parseInt(btn.dataset.slot, 10);
-      if (!isNaN(slot)) _broadcastKick(slot);
+      if (!isNaN(slot)) _broadcastKick(slot, btn.dataset.reason);
     });
   });
 }
 
-// Re-render the chip list once a second while a game is active so the turn
-// timer ticks and the kick button flips to enabled at the AFK threshold.
+// Re-render once a second while a game is active so the turn timer ticks
+// and the remove buttons enable on time.
 function _ensureChipTick() {
   const want = diceGameRunning || diceGameSpectating;
   if (want && !chipTickHandle) {
@@ -763,32 +1033,41 @@ function _ensureChipTick() {
   }
 }
 
-function _broadcastKick(slot) {
-  if (gameHostID !== myID) return;     // only host can kick
-  if (slot === myGameSlot) return;     // can't self-kick
+function _broadcastKick(slot, reason) {
+  if (slot === myGameSlot || myGameSlot < 0) return;
+  const name = _nameForSlot(slot);
+  if (!confirm(`Remove ${name} from this game?`)) return;
   sendSignal({
     type:   "player_kick",
     from:   myID,
     to:     "room",
     roomID: roomID,
     slot:   slot,
+    reason: reason === "afk" ? "afk" : "disconnected",
   });
-  _applyKick(slot, myID);
+  _applyKick(slot, myID, reason);
 }
 
-function _applyKick(slot, fromID) {
-  if (!gameRoster.length) return;
-  if (fromID !== gameHostID) return;          // ignore non-host kicks
+// Applies a removal requested by a player in this game.  Who may request
+// one is enforced in the UI; every client accepts a request from any roster
+// member so that all clients apply the same removals and stay in sync.
+function _applyKick(slot, fromID, reason) {
+  if (!gameRoster.length || !gameRoster.includes(fromID)) return;
+  _markKicked(slot, reason);
+}
+
+function _markKicked(slot, reason) {
   if (slot < 0 || slot >= gameRoster.length) return;
   if (kickedSlots.has(slot)) return;          // already applied
   kickedSlots.add(slot);
-  // Persist the kick across rounds — the auto-roster builder consults
-  // kickedClientIDs so an AFK player stays out of the next New Game.
+  // AFK kicks persist across rounds so the player stays out of the next New
+  // Game; disconnect removals don't — if they come back they play again.
   const clientID = gameRoster[slot];
-  if (clientID && clientID !== myID) kickedClientIDs.add(clientID);
+  if (reason === "afk" && clientID && clientID !== myID) kickedClientIDs.add(clientID);
   if (typeof window.diceGameKick === "function") {
     window.diceGameKick(slot);
   }
+  _refreshActionButtons();
   _updateGamePlayerList(gameRoster, myGameSlot);
 }
 
@@ -808,21 +1087,25 @@ function _applyKick(slot, fromID) {
   const needsPermission =
     typeof window.DeviceMotionEvent.requestPermission === "function";
 
-  // Firefox Android intercepts shake gestures for its built-in AI page
-  // summary feature, so our DeviceMotion listener never fires.  There's no
-  // programmatic way for a page to opt out — the user has to disable the
-  // gesture in Firefox settings ("Shake to summarize") or use a different
-  // browser.  Surface a hint on the button so the user knows the on-screen
-  // Roll button is the working alternative on Firefox.
+  // Firefox Android uses shake gestures for its own "shake to summarize"
+  // feature, and a page has no way to ask it to give the gesture up.  We
+  // still listen (so shake-to-roll works once the user turns that feature
+  // off) and show a one-time, dismissible note explaining how.
   const isFirefox = /Firefox|FxiOS/i.test(navigator.userAgent || "");
-  if (isFirefox && btn) {
-    btn.textContent = "Shake-to-roll: blocked by Firefox — use Roll button";
-    btn.disabled = true;
-    btn.style.display = "inline-block";
-    btn.title =
-      "Firefox captures the shake gesture for its AI page-summary feature." +
-      " Use the on-screen Roll button instead, or disable Firefox's shake-to-summarise.";
-    return;
+  const touch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  const HINT_DISMISSED_KEY = "pig.shakeHintDismissed";
+  if (isFirefox && touch) {
+    const hint = document.getElementById("shake-hint");
+    let dismissed = false;
+    try { dismissed = window.localStorage.getItem(HINT_DISMISSED_KEY) === "1"; } catch (_) {}
+    if (hint && !dismissed) {
+      hint.hidden = false;
+      const close = document.getElementById("shake-hint-dismiss");
+      if (close) close.addEventListener("click", () => {
+        hint.hidden = true;
+        try { window.localStorage.setItem(HINT_DISMISSED_KEY, "1"); } catch (_) {}
+      });
+    }
   }
 
   // Shake-detection state. SHAKE_THRESHOLD is the L1 norm of the per-axis
@@ -889,3 +1172,6 @@ function _applyKick(slot, fromID) {
       });
   });
 })();
+
+// Paint the pre-game chip list once on load.
+_rerender();

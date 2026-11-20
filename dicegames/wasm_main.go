@@ -59,15 +59,6 @@ func main() {
 		return nil
 	}))
 
-	// Bridge turn changes back to JS so the host page can enable/disable
-	// the Roll/Hold buttons and drive the mobile fullscreen takeover.
-	g.SetTurnChangeFn(func(currentIdx int) {
-		fn := js.Global().Get("diceGameOnTurnChange")
-		if fn.Truthy() {
-			fn.Invoke(currentIdx)
-		}
-	})
-
 	// Bridge game-over so the host page can show a "New Game" button.
 	g.SetGameOverFn(func(winnerIdx int) {
 		fn := js.Global().Get("diceGameOnGameOver")
@@ -92,6 +83,15 @@ func main() {
 		return g.StateJSON()
 	}))
 
+	// Expose window.diceGameLoadState(json) so a player rejoining mid-game
+	// can adopt the live state a peer sent them (from diceGameGetState).
+	js.Global().Set("diceGameLoadState", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) > 0 {
+			g.LoadState(args[0].String())
+		}
+		return nil
+	}))
+
 	// Expose window.diceGameReset(numPlayers, myPlayerIdx, gameType?) so a
 	// "New Game" click in JS restarts the game without reloading the WASM
 	// module. The third argument is optional and selects the rules variant.
@@ -105,6 +105,18 @@ func main() {
 		}
 		return nil
 	}))
+
+	// Bridge turn changes back to JS so the host page can enable/disable
+	// the Roll/Hold buttons and drive the mobile fullscreen takeover.
+	// Registered last: it fires immediately, and JS treats that first call
+	// as "WASM ready" and may call any of the functions above (e.g.
+	// diceGameLoadState for a mid-game rejoin).
+	g.SetTurnChangeFn(func(currentIdx int) {
+		fn := js.Global().Get("diceGameOnTurnChange")
+		if fn.Truthy() {
+			fn.Invoke(currentIdx)
+		}
+	})
 
 	ebiten.SetWindowSize(game.ScreenWidth, game.ScreenHeight)
 	ebiten.SetWindowTitle("Pig Dice — Multiplayer")
