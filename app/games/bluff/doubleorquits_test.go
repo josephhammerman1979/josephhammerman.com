@@ -34,8 +34,8 @@ func TestDoqHonestClaimChallengedChallengerDoubles(t *testing.T) {
 	doqAct(t, g, 1, games.Action{Type: "challenge"})
 	// Seat 1 pays 3 (pot 6), seat 0 takes 6: 19-3=16 for seat 1, 19+6=25 for
 	// seat 0.  Then round 2 starts with a fresh ante of 1 each.
-	if g.chips[0] != 24 || g.chips[1] != 15 || g.chips[2] != 18 || g.pot != 3 {
-		t.Fatalf("chips=%v pot=%d", g.chips, g.pot)
+	if g.st.Chips[0] != 24 || g.st.Chips[1] != 15 || g.st.Chips[2] != 18 || g.pot.Total() != 3 {
+		t.Fatalf("chips=%v pot=%d", g.st.Chips, g.pot.Total())
 	}
 	if g.round != 2 {
 		t.Fatalf("round=%d, want 2", g.round)
@@ -47,11 +47,11 @@ func TestDoqLieCaughtClaimantDoublesAndPotCarries(t *testing.T) {
 	doqAct(t, g, 0, games.Action{Type: "claim", Dice: fullHouse})
 	doqAct(t, g, 1, games.Action{Type: "believe"})
 	doqAct(t, g, 2, games.Action{Type: "challenge"})
-	if g.chips[0] != 16 || g.pot != 6 || g.round != 2 {
-		t.Fatalf("chips=%v pot=%d round=%d, want claimant 16, pot 6, round 2", g.chips, g.pot, g.round)
+	if g.st.Chips[0] != 16 || g.pot.Total() != 6 || g.round != 2 {
+		t.Fatalf("chips=%v pot=%d round=%d, want claimant 16, pot 6, round 2", g.st.Chips, g.pot.Total(), g.round)
 	}
-	if g.chips[2] != 19 {
-		t.Fatalf("no new ante on a carried pot: chips=%v", g.chips)
+	if g.st.Chips[2] != 19 {
+		t.Fatalf("no new ante on a carried pot: chips=%v", g.st.Chips)
 	}
 }
 
@@ -72,8 +72,8 @@ func TestDoqBelievedClaimMustBeBeatenOrPassed(t *testing.T) {
 	}
 	// Seat 2 passes too: seat 0's standing claim takes the pot.
 	doqAct(t, g, 2, games.Action{Type: "pass"})
-	if g.chips[0] != 19+3-1 || g.round != 2 { // took the pot of 3, then anted for round 2
-		t.Fatalf("chips=%v round=%d", g.chips, g.round)
+	if g.st.Chips[0] != 19+3-1 || g.round != 2 { // took the pot of 3, then anted for round 2
+		t.Fatalf("chips=%v round=%d", g.st.Chips, g.round)
 	}
 }
 
@@ -126,5 +126,76 @@ func TestDoqHidesUnexposedDice(t *testing.T) {
 	b, _ := json.Marshal(g.View(0))
 	if !strings.Contains(string(b), "85") {
 		t.Fatal("the thrower can't see their own dice")
+	}
+}
+
+func TestDoqAllInChallengerCanOnlyLoseWhatTheyHave(t *testing.T) {
+	g := newDoq(games.NewTestEnv(3, 3, 3, 6, 6), 3, 8, 20) // pot 3
+	g.st.Chips[1] = 1
+	doqAct(t, g, 0, games.Action{Type: "claim", Dice: fullHouse})
+	doqAct(t, g, 1, games.Action{Type: "challenge"}) // owes 3, has 1
+	if g.st.Chips[1] < 0 {
+		t.Fatalf("challenger went negative: %v", g.st.Chips)
+	}
+	if g.last == nil || !g.last.AllIn || g.last.Paid != 1 {
+		t.Fatalf("last=%+v, want an all-in payment of 1", g.last)
+	}
+	// Seat 0 (not all-in) takes the whole pot: 3 antes + 1.
+	if g.last.Won != 4 {
+		t.Fatalf("claimant won %d, want 4", g.last.Won)
+	}
+}
+
+func TestDoqAllInWinnerOnlyWinsTheirStake(t *testing.T) {
+	g := newDoq(games.NewTestEnv(3, 3, 3, 6, 6), 3, 8, 20)
+	// Seat 0 is all-in for just their 1-chip ante; the others put in 4 each.
+	g.pot = games.NewPot(3)
+	g.pot.Add(0, 1, true)
+	g.pot.Add(1, 4, false)
+	g.pot.Add(2, 4, false)
+	g.st.Chips[0] = 0
+	doqAct(t, g, 0, games.Action{Type: "claim", Dice: fullHouse})
+	doqAct(t, g, 1, games.Action{Type: "challenge"}) // honest: seat 1 pays 9
+	if g.last.Won != 3 {
+		t.Fatalf("all-in winner took %d, want their 1 from each of 3 = 3", g.last.Won)
+	}
+	if g.last.Left == 0 {
+		t.Fatal("the rest of the pot should stay in")
+	}
+}
+
+func TestDoqBustedPlayerRebuysOrLeaves(t *testing.T) {
+	g := newDoq(games.NewTestEnv(1, 2, 4, 5, 6), 2, 8, 20)
+	g.st.Chips[0] = 2 // after the ante: 2 left
+	doqAct(t, g, 0, games.Action{Type: "claim", Dice: fullHouse})
+	doqAct(t, g, 1, games.Action{Type: "challenge"}) // a lie: seat 0 owes 2, has 2
+	if g.st.Chips[0] != 0 || !g.rebuy[0] {
+		t.Fatalf("chips=%v rebuy=%v, want seat 0 busted and deciding", g.st.Chips, g.rebuy)
+	}
+	if w := g.Waiting(); len(w) != 1 || w[0] != 0 {
+		t.Fatalf("waiting %v", w)
+	}
+	if err := g.Act(1, games.Action{Type: "claim", Dice: fullHouse}); err == nil {
+		t.Fatal("play should wait for the rebuy decision")
+	}
+	doqAct(t, g, 0, games.Action{Type: "rebuy"})
+	if g.st.BuyIns[0] != 2 || g.round != 2 {
+		t.Fatalf("buyIns=%d round=%d", g.st.BuyIns[0], g.round)
+	}
+}
+
+func TestDoqLeavingEndsTwoPlayerGame(t *testing.T) {
+	g := newDoq(games.NewTestEnv(1, 2, 4, 5, 6), 2, 8, 20)
+	g.st.Chips[0] = 2
+	doqAct(t, g, 0, games.Action{Type: "claim", Dice: fullHouse})
+	doqAct(t, g, 1, games.Action{Type: "challenge"})
+	doqAct(t, g, 0, games.Action{Type: "leave"})
+	if !g.Over() || len(g.Winners()) != 1 || g.Winners()[0] != 1 {
+		t.Fatalf("over=%v winners=%v", g.Over(), g.Winners())
+	}
+	for i, c := range g.st.Chips {
+		if c < 0 {
+			t.Fatalf("seat %d negative: %v", i, g.st.Chips)
+		}
 	}
 }

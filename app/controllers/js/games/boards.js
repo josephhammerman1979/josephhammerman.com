@@ -82,7 +82,13 @@
     // Controls.
     let actions = "";
     if (ui.waitingOnMe && mine) {
-      if (s.phase === "decide") {
+      if (s.phase === "rebuy") {
+        actions = `<p class="note">You're out of chips. Buy back in (it counts against your final result), or sit out the rest of the game.</p>
+          <div class="board-actions">
+            ${ui.button(`Buy back in for ${s.start}`, { type: "rebuy" }, { primary: true })}
+            ${ui.button("Sit out the rest of the game", { type: "leave" }, { cls: "danger" })}
+          </div>`;
+      } else if (s.phase === "decide") {
         const w = mine.wager;
         actions = `<p class="note">The banker has <strong>${ui.esc(bank.hand)}</strong> and may still re-roll up to ${s.maxReroll} dice.
             You have <strong>${ui.esc(mine.hand)}</strong>, betting ${plural(w, "chip", "chips")}.</p>
@@ -118,16 +124,19 @@
 
     // Last round's result, while the next round's bets go down.
     let last = "";
-    if (s.last && (s.phase === "wager" || over)) {
+    if (s.last && (s.phase === "wager" || s.phase === "rebuy" || over)) {
       const L = s.last;
       const net = L.net > 0 ? pill(`bank +${L.net}`, "good") : L.net < 0 ? pill(`bank −${-L.net}`, "bad") : pill("bank even");
       last = `<div class="board-section">
           <h3>Round ${L.round}: ${ui.name(L.banker)} banked with ${ui.esc(L.bankHand)} ${net}</h3>
+          ${L.short ? `<p class="note">The bank ran out of chips — ${L.short} in winnings couldn't be paid.</p>` : ""}
           <div class="board-row">${ui.dice(L.bankDice, { small: true })}</div>
           ${L.rows.map((r) => `<div class="board-row">
               <span class="bk-who">${ui.name(r.seat)}</span>${ui.dice(r.dice, { small: true })}
               <span class="note">${ui.esc(r.hand)}</span>
-              ${r.choice === "fold" ? pill(`folded, lost ${r.wager}`, "bad") : r.result > 0 ? pill(`won ${r.wager}`, "good") : pill(`lost ${r.wager}`, "bad")}
+              ${r.choice === "fold" ? pill(`folded, lost ${r.wager}`, "bad")
+                : r.result > 0 ? pill(r.short ? `won ${r.paid} of ${r.wager} — the bank ran dry` : `won ${r.paid}`, r.short ? "gold" : "good")
+                : pill(`lost ${r.paid}`, "bad")}
               ${r.choice === "double" ? pill("doubled", "gold") : ""}
             </div>`).join("")}
         </div>`;
@@ -146,10 +155,17 @@
       else if (p.choice === "double") res = pill("doubled", "gold");
       else if (p.choice === "stay") res = pill("stays");
       else if (s.phase === "decide" && p.inRound) res = p.decided ? pill("decided ✓") : pill("deciding…");
+      let chips = `<strong>${p.chips}</strong>`;
+      if (p.out) chips = pill("out", "bad");
+      else if (p.gone) chips = pill("sat out", "bad");
+      else if (p.rebuying) chips = pill("busted — deciding", "bad");
+      else if (p.busted) chips = pill("busted — sitting out", "bad");
+      const net = p.net > 0 ? `+${p.net}` : String(p.net);
       return {
         seat,
         cells: [
-          p.out ? pill("out", "bad") : `<strong>${p.chips}</strong>`,
+          chips,
+          `${p.buyIns > 1 ? `${p.buyIns}× ` : ""}<span class="note">net</span> ${net}`,
           bet,
           p.rolled ? `${ui.dice(p.dice, { small: true })}<div class="note">${ui.esc(p.hand)}${p.rerolled ? " (re-rolled)" : ""}</div>` : "",
           res,
@@ -159,7 +175,7 @@
 
     return `${head}${point}${turn}
       ${actions ? `<div class="board-section">${actions}</div>` : ""}
-      ${ui.scoreTable(["Chips", "Bet", "Hand", ""], rows)}
+      ${ui.scoreTable(["Chips", "Buy-ins / net", "Bet", "Hand", ""], rows)}
       ${last}`;
   }
 

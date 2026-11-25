@@ -173,9 +173,9 @@ func TestKlondikeEveryoneFolds(t *testing.T) {
 	}
 }
 
-func TestKlondikeBustAndRotationEnd(t *testing.T) {
+func TestKlondikeBustThenLeaveEndsGame(t *testing.T) {
 	env := games.NewTestEnv(6, 6, 6, 6, 6, 1, 2, 3, 4, 6)
-	g := newKlondike(env, 2, false, 20, 1)
+	g := newKlondike(env, 2, false, 20, 2)
 	g.chips[1] = 3
 	act(t, g, 1, games.Action{Type: "wager", Amount: 3})
 	if l := g.Legal(1); len(l) != 0 {
@@ -183,8 +183,65 @@ func TestKlondikeBustAndRotationEnd(t *testing.T) {
 	}
 	act(t, g, 0, games.Action{Type: "roll"})
 	act(t, g, 1, games.Action{Type: "roll"})
+	if g.chips[1] != 0 || g.phase != bkRebuy {
+		t.Fatalf("chips=%v phase=%s, want seat 1 busted and a rebuy choice", g.chips, g.phase)
+	}
+	if w := g.Waiting(); len(w) != 1 || w[0] != 1 {
+		t.Fatalf("waiting %v, want the busted seat", w)
+	}
+	act(t, g, 1, games.Action{Type: "leave"})
 	if !g.Over() || len(g.Winners()) != 1 || g.Winners()[0] != 0 {
-		t.Fatalf("expected seat 0 to win after seat 1 busted; over=%v winners=%v chips=%v", g.Over(), g.Winners(), g.chips)
+		t.Fatalf("expected seat 0 to win when seat 1 left; over=%v winners=%v", g.Over(), g.Winners())
+	}
+}
+
+func TestKlondikeRebuyCountsAgainstNet(t *testing.T) {
+	env := games.NewTestEnv(6, 6, 6, 6, 6, 1, 2, 3, 4, 6)
+	g := newKlondike(env, 2, false, 20, 2)
+	g.chips[1] = 3
+	act(t, g, 1, games.Action{Type: "wager", Amount: 3})
+	act(t, g, 0, games.Action{Type: "roll"})
+	act(t, g, 1, games.Action{Type: "roll"})
+	act(t, g, 1, games.Action{Type: "rebuy"})
+	if g.chips[1] != 20 || g.st.BuyIns[1] != 2 || g.st.Net(1) != -20 {
+		t.Fatalf("after rebuy chips=%d buyIns=%d net=%d", g.chips[1], g.st.BuyIns[1], g.st.Net(1))
+	}
+	if g.phase != bkWager || g.banker != 1 {
+		t.Fatalf("phase=%s banker=%d, want seat 1 banking the next round", g.phase, g.banker)
+	}
+}
+
+func TestKlondikeBankerNeverGoesNegative(t *testing.T) {
+	// Banker (seat 0) rolls a 6-high nothing; seats 1 and 2 both win.
+	env := games.NewTestEnv(1, 2, 3, 4, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 4)
+	g := newKlondike(env, 3, false, 20, 1)
+	g.chips[0] = 4
+	act(t, g, 1, games.Action{Type: "wager", Amount: 3})
+	act(t, g, 2, games.Action{Type: "wager", Amount: 3})
+	act(t, g, 0, games.Action{Type: "roll"})
+	act(t, g, 1, games.Action{Type: "roll"})
+	act(t, g, 2, games.Action{Type: "roll"})
+	// Seat 1 is paid 3 in full; seat 2 gets the banker's last chip.
+	if g.chips[0] != 0 || g.chips[1] != 23 || g.chips[2] != 21 {
+		t.Fatalf("chips=%v, want [0 23 21]", g.chips)
+	}
+	if g.last == nil || g.last.Short != 2 || !g.last.Rows[1].Short {
+		t.Fatalf("summary should record the 2 the banker couldn't pay: %+v", g.last)
+	}
+}
+
+func TestKlondikeSkipsBustedBanker(t *testing.T) {
+	g := newKlondike(games.NewTestEnv(), 4, false, 20, 1)
+	g.chips[1] = 0
+	g.st.Gone[1] = true
+	g.Remove(0) // the round is called off; seat 1 would bank next but sat out
+	if g.banker != 2 || g.Over() {
+		t.Fatalf("banker=%d over=%v, want seat 2 banking (seat 1 sat out)", g.banker, g.Over())
+	}
+	for _, s := range g.order {
+		if s == 1 {
+			t.Fatal("a player sitting out was dealt into the round")
+		}
 	}
 }
 

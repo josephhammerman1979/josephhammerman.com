@@ -25,6 +25,36 @@
 
   function signed(n) { return n > 0 ? `+${n}` : String(n); }
 
+  // ── Chips (Threes, 1-4-24): stacks, all-in, busting and rebuys ──────────
+
+  function chipCell(s, seat) {
+    if (s.gone[seat]) return pill("sat out", "bad");
+    if (s.rebuy[seat]) return pill("busted — deciding", "bad");
+    let html = `<span class="big-number">${s.chips[seat]}</span>`;
+    if (s.chips[seat] === 0 && !s.over) html = pill("busted — sitting out", "bad");
+    if (s.allIn[seat] && !s.over) html += " " + pill("all-in", "gold");
+    return html;
+  }
+
+  function netCell(s, seat) {
+    return `${s.buyIns[seat] > 1 ? `${s.buyIns[seat]}× ` : ""}<span class="note">net</span> ${signed(s.net[seat])}`;
+  }
+
+  // Between hands, busted players buy back in or sit out.  Returns the
+  // whole board for that pause, or "" when play is on.
+  function rebuyBoard(s, ui, table) {
+    if (!s.rebuying) return "";
+    const busted = s.rebuy.map((r, seat) => (r ? seat : -1)).filter((x) => x >= 0);
+    return `<div class="board-section">
+        <h3>Out of chips: ${busted.map((x) => ui.name(x)).join(", ")}</h3>
+        <p class="note">The next hand starts once they buy back in or sit out. Buying back in counts against your final result.</p>
+        ${ui.waitingOnMe ? `<div class="board-actions">
+          ${ui.button(`Buy back in for ${s.start}`, { type: "rebuy" }, { primary: true })}
+          ${ui.button("Sit out the rest of the game", { type: "leave" }, { cls: "danger" })}
+        </div>` : ""}
+      </div>${table}`;
+  }
+
   function smallDice(faces, opts) {
     return (faces || []).map((f) => ui_die(f, Object.assign({ small: true }, opts || {}))).join("");
   }
@@ -240,13 +270,17 @@
     const rows = s.chips.map((c, seat) => ({
       seat,
       cells: [
-        `<span class="big-number">${signed(c)}</span>`,
+        chipCell(s, seat),
+        netCell(s, seat),
         s.wins[seat] ? plural(s.wins[seat], "win", "wins") : "",
         s.hands[seat] ? s.hands[seat].map((f) => ui.die(f, { small: true })).join("") : "",
         !s.hands[seat] ? "" : s.scores[seat] < 0 ? pill("no 1-4", "bad")
           : pill(String(s.scores[seat]), s.scores[seat] === best ? "good" : ""),
       ],
     }));
+    const midTable = ui.scoreTable(["Chips", "Buy-ins / net", "Rounds", "This round", "Score"], rows);
+    const paused = rebuyBoard(s, ui, midTable);
+    if (paused) return paused;
     return keepBoard(s, ui, {
       numDice: 6,
       pills: pill(`Round ${s.round} of ${s.rounds}`, "gold") +
@@ -263,7 +297,7 @@
           ? `Round ${res.round}: nobody qualified — pot carried over`
           : `Round ${res.round}: pot of ${res.pot} won`, res,
         (seat) => res.scores[seat] < 0 ? pill("no 1-4", "bad") : pill(String(res.scores[seat]))),
-      table: ui.scoreTable(["Chips", "Rounds", "This round", "Score"], rows),
+      table: midTable,
     });
   }
 
@@ -325,12 +359,16 @@
     const rows = s.chips.map((c, seat) => ({
       seat,
       cells: [
-        `<span class="big-number">${signed(c)}</span>`,
+        chipCell(s, seat),
+        netCell(s, seat),
         s.seatHands[seat] ? s.seatHands[seat].map((f) => ui.die(f, { small: true })).join("") : "",
         s.seatHands[seat] ? pill(String(s.scores[seat]), s.scores[seat] === best ? "good" : "")
           : (!s.over && !playing.has(seat) ? pill("sitting out", "") : ""),
       ],
     }));
+    const thrTable = ui.scoreTable(["Chips", "Buy-ins / net", "This hand (kept)", "Score"], rows);
+    const paused = rebuyBoard(s, ui, thrTable);
+    if (paused) return paused;
     return keepBoard(s, ui, {
       numDice: 5,
       pills: pill(`Hand ${s.hand} of ${s.hands}`, "gold") + `<span class="pl-pot">Pot <strong>${s.pot}</strong></span>` +
@@ -341,7 +379,7 @@
       preview: (faces) => faces.length ? `→ score ${score + threesScore(faces)}` : "",
       lastHTML: (res) => lastRoundHTML(ui, `Hand ${res.round}${res.winner < 0 ? " — tie" : " result"}`, res,
         (seat) => pill(String(res.scores[seat]))),
-      table: ui.scoreTable(["Chips", "This hand (kept)", "Score"], rows),
+      table: thrTable,
     });
   }
 

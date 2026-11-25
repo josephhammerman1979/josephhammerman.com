@@ -1,7 +1,8 @@
 // doubleorquits.js — Double or Quits.  See games.js for the renderer API.
 //
 // state (from app/games/bluff/doubleorquits.go): {round, rounds, pot, chips,
-//   passed, thrower, phase ("throw"|"respond"), responder, drawn,
+//   buyIns, net, allIn, gone, rebuy, start,
+//   passed, thrower, phase ("throw"|"respond"|"rebuy"), responder, drawn,
 //   dice (0 = hidden from me), exposed, mine, claim, claimDice,
 //   established, estBy, last}
 
@@ -39,8 +40,19 @@
         <span class="doq-claim-name">${ui.esc(s.claim.name)}</span></div>`;
     }
 
-    html += `<p class="note">${s.mine ? "Your dice — only exposed dice are visible to others." : `${ui.name(s.thrower)}'s dice`}</p>`;
-    html += hand(s, ui);
+    if (s.phase === "rebuy") {
+      const busted = s.rebuy.map((r, seat) => r ? seat : -1).filter((x) => x >= 0);
+      html += `<p class="note">Out of chips: ${busted.map((x) => ui.name(x)).join(", ")}. The next round starts once they buy back in or sit out.</p>`;
+      if (myTurn) {
+        html += `<div class="board-actions">
+          ${ui.button(`Buy back in for ${s.start}`, { type: "rebuy" }, { primary: true })}
+          ${ui.button("Sit out the rest of the game", { type: "leave" }, { cls: "danger" })}
+        </div><p class="note">Buying back in counts against your final result.</p>`;
+      }
+    } else {
+      html += `<p class="note">${s.mine ? "Your dice — only exposed dice are visible to others." : `${ui.name(s.thrower)}'s dice`}</p>`;
+      html += hand(s, ui);
+    }
 
     if (myTurn && s.phase === "throw") {
       if (!s.drawn) {
@@ -63,7 +75,7 @@
     if (myTurn && s.phase === "respond") {
       html += `<div class="board-actions">
         ${ui.button("Believe it", { type: "believe" }, { primary: true })}
-        ${ui.button(`Challenge — if it's true you pay ${s.pot}`, { type: "challenge" }, { cls: "danger" })}
+        ${ui.button(`Challenge — if it's true you pay ${Math.min(s.pot, s.chips[ui.mySeat])}`, { type: "challenge" }, { cls: "danger" })}
       </div>`;
     }
     html += `</div>`;
@@ -74,19 +86,25 @@
         <div class="board-row">${ui.name(l.challenger)} challenged ${ui.name(l.claimant)}'s ${ui.esc(l.claim.name)}:
           ${ui.dice(l.dice.slice().sort((a, b) => b - a), { small: true })} <strong>${ui.esc(l.actual.name)}</strong></div>
         <p class="note">${l.honest
-          ? `It was there — ${ui.name(l.challenger)} paid ${l.paid} and ${ui.name(l.claimant)} took the pot of ${l.won}.`
-          : `A bluff — ${ui.name(l.claimant)} paid ${l.paid} to double the pot, which carried over.`}</p></div>`;
+          ? `It was there — ${ui.name(l.challenger)} paid ${l.paid}${l.allIn ? " (all-in)" : ""} and ${ui.name(l.claimant)} took ${l.won}${l.left ? `; ${l.left} stayed in the pot because they were all-in` : ""}.`
+          : `A bluff — ${ui.name(l.claimant)} paid ${l.paid}${l.allIn ? " (all-in)" : ""} into the pot, which carried over.`}</p></div>`;
     }
 
     const rows = s.chips.map((c, seat) => {
       let status = "";
       if (ui.view.removed[seat]) status = "";
+      else if (s.gone[seat]) status = `<span class="pill bad">sat out</span>`;
+      else if (s.rebuy[seat]) status = `<span class="pill bad">busted — deciding</span>`;
+      else if (c === 0 && s.passed[seat]) status = `<span class="pill bad">busted — sitting out</span>`;
       else if (s.passed[seat]) status = `<span class="pill bad">passed</span>`;
       else if (seat === s.thrower) status = s.phase === "respond" ? `<span class="pill gold">claiming</span>` : `<span class="pill gold">throwing</span>`;
       else if (seat === s.estBy) status = `<span class="pill good">claim stands</span>`;
-      return { seat, cells: [`<span class="big-number">${c}</span>`, status] };
+      if (s.allIn[seat]) status += ` <span class="pill gold">all-in</span>`;
+      const net = s.net[seat] > 0 ? `+${s.net[seat]}` : String(s.net[seat]);
+      return { seat, cells: [`<span class="big-number">${c}</span>`,
+        `${s.buyIns[seat] > 1 ? `${s.buyIns[seat]}× ` : ""}<span class="note">net</span> ${net}`, status] };
     });
-    html += ui.scoreTable(["Chips", "This round"], rows);
+    html += ui.scoreTable(["Chips", "Buy-ins / net", "This round"], rows);
     return html;
   }
 

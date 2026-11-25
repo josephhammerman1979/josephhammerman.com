@@ -15,7 +15,7 @@ import (
 // believes the claim or challenges it.
 //
 //   - Challenged and the hand is as good as claimed: the challenger doubles
-//     the pot and the claimant takes it all.
+//     the pot and the claimant takes it.
 //   - Challenged and it was a lie: the claimant doubles the pot, which
 //     carries over to the next round.
 //   - Believed by everyone: the claim is established, and the player to the
@@ -24,11 +24,17 @@ import (
 //     claims).  If everyone else passes, the established claimant takes the
 //     pot.
 //
+// Chips follow the shared rules in app/games/chips.go: nobody goes negative,
+// a player who can't cover a payment is all-in and can only win their own
+// stake from each player's share of the pot, and busted players sit out the
+// rest of the round, then buy back in or sit out the game.
+//
 // Actions:
 //   thrower: {type:"draw", dice:[indices to expose], index: 0 keep / 1 re-roll
 //            hidden / 2 re-roll exposed}, {type:"claim", dice:[5 faces]},
 //            {type:"pass"} (only once a claim is established)
 //   responder: {type:"believe"}, {type:"challenge"}
+//   between rounds, busted players: {type:"rebuy"}, {type:"leave"}
 
 const (
 	doqDice = 5
@@ -43,9 +49,10 @@ func init() {
 		Rules: []string{
 			"Everyone antes 1 chip. The thrower rolls five hidden dice and may redraw once: expose any dice, then re-roll either the exposed ones or the hidden ones.",
 			"The thrower claims a poker hand — true or not. In turn, everyone still in the round believes it or challenges.",
-			"Challenge and the hand was there: you double the pot and the thrower takes it all. Challenge a lie: the thrower doubles the pot and it carries over.",
+			"Challenge and the hand was there: you double the pot and the thrower takes it. Challenge a lie: the thrower doubles the pot and it carries over.",
 			"If everyone believes, the next player throws and must claim higher — or pass and sit out the rest of the round (no more challenging).",
-			"If everyone else passes, the standing claim takes the pot. Most chips after the last round wins.",
+			"You can only lose what you have. Short of the full amount? You're all-in, and can only win back your own stake from each player.",
+			"Out of chips: sit out the rest of the round, then buy back in or sit out the game. Best result after buy-ins wins.",
 		},
 		Options: []games.Option{
 			{Key: "rounds", Label: "Rounds", Choices: []games.Choice{
@@ -61,6 +68,7 @@ func init() {
 			"If they are disbelieved the dice are revealed, and if they had the hand they claimed or better they win and the challenger doubles the pot. If they are revealed to have been lying they must double the pot.",
 			"If the claim goes around the table, the player to their left throws and must make a higher claim than the one that succeeded earlier in the round.",
 			"House rules: a five-card-draw style redraw — expose any number of dice, then re-roll the exposed or the hidden dice. Players can pass when they are establishing the result if they cannot beat the current established hand; players who pass are out of the round and cannot challenge any future results.",
+			"Players who go bust must wait until the round is complete, then buy in again. You can never go negative — you can only lose your stake — and if you can't match the stake, you can only win from the pot what you put in.",
 		},
 		New: func(env *games.Env, n int, opts map[string]string) games.Game {
 			return newDoq(env, n, optInt(opts, "rounds", 8), optInt(opts, "chips", 20))
@@ -77,8 +85,10 @@ type doqResult struct {
 	Dice       []int      `json:"dice"`
 	Actual     games.Hand `json:"actual"`
 	Honest     bool       `json:"honest"`
-	Paid       int        `json:"paid"` // what the loser put in
-	Won        int        `json:"won"`  // pot taken by the claimant (0 if it carried over)
+	Paid       int        `json:"paid"`  // what the loser put in
+	AllIn      bool       `json:"allIn"` // the loser couldn't pay in full
+	Won        int        `json:"won"`   // taken by the claimant (0 if it carried over)
+	Left       int        `json:"left"`  // left in the pot because the winner was all-in
 }
 
 type doq struct {
@@ -86,11 +96,11 @@ type doq struct {
 	seats  games.Seats
 	rounds int
 	round  int
-	chips  []int
-	pot    int
+	st     games.Stacks
+	pot    games.Pot
 
 	starter int
-	passed  []bool
+	passed  []bool // out of this round: passed, or had no chips at the start
 
 	// The current throw.
 	thrower int
@@ -105,34 +115,58 @@ type doq struct {
 	established *games.Hand
 	estBy       int
 
-	last *doqResult
-	over bool
+	rebuy []bool // between rounds: busted players still deciding
+	last  *doqResult
+	over  bool
 }
 
 func newDoq(env *games.Env, n, rounds, chips int) *doq {
-	g := &doq{env: env, seats: games.NewSeats(n), rounds: rounds, chips: make([]int, n)}
-	for i := range g.chips {
-		g.chips[i] = chips
-	}
+	g := &doq{env: env, seats: games.NewSeats(n), rounds: rounds,
+		st: games.NewStacks(n, chips), pot: games.NewPot(n), rebuy: make([]bool, n), starter: -1}
 	g.startRound(0)
 	return g
 }
 
-func (g *doq) startRound(starter int) {
-	g.round++
-	g.starter = starter
-	g.passed = make([]bool, g.seats.N)
-	g.established, g.estBy = nil, -1
-	if g.pot == 0 {
-		for _, s := range g.seats.Active() {
-			g.chips[s] -= doqAnte
-			g.pot += doqAnte
+func (g *doq) canPlay(seat int) bool { return g.seats.In(seat) && g.st.Funded(seat) }
+
+func (g *doq) playable() int {
+	n := 0
+	for s := 0; s < g.seats.N; s++ {
+		if g.canPlay(s) {
+			n++
 		}
-		g.env.Log(games.LogInfo, "Round %d: everyone antes %d — the pot is %d.", g.round, doqAnte, g.pot)
-	} else {
-		g.env.Log(games.LogInfo, "Round %d: the pot of %d carries over.", g.round, g.pot)
 	}
-	g.throw(starter)
+	return n
+}
+
+// startRound deals in every player with chips, starting from the first one
+// at or after first.
+func (g *doq) startRound(first int) {
+	if g.playable() < 2 {
+		g.finish()
+		return
+	}
+	for !g.canPlay(first) {
+		first = (first + 1) % g.seats.N
+	}
+	g.round++
+	g.starter = first
+	g.passed = make([]bool, g.seats.N)
+	for s := range g.passed {
+		g.passed[s] = !g.canPlay(s)
+	}
+	g.established, g.estBy = nil, -1
+	if g.pot.Total() == 0 {
+		for _, s := range g.seats.Active() {
+			if !g.passed[s] {
+				g.st.PayInto(&g.pot, s, doqAnte)
+			}
+		}
+		g.env.Log(games.LogInfo, "Round %d: everyone antes %d — the pot is %d.", g.round, doqAnte, g.pot.Total())
+	} else {
+		g.env.Log(games.LogInfo, "Round %d: the pot of %d carries over.", g.round, g.pot.Total())
+	}
+	g.throw(first)
 }
 
 // throw gives seat a fresh hidden hand.
@@ -146,18 +180,7 @@ func (g *doq) throw(seat int) {
 	g.env.Log(games.LogRoll, "%s threw five dice under the cup.", P(seat))
 }
 
-// inRound lists players who haven't passed, clockwise from seat.
-func (g *doq) inRoundFrom(seat int) []int {
-	out := []int{}
-	for _, s := range g.seats.OrderFrom(seat) {
-		if !g.passed[s] {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// nextIn returns the next player after seat who hasn't passed, or seat.
+// nextIn returns the next player after seat still in this round, or seat.
 func (g *doq) nextIn(seat int) int {
 	for i := 1; i <= g.seats.N; i++ {
 		s := (seat + i) % g.seats.N
@@ -171,6 +194,29 @@ func (g *doq) nextIn(seat int) int {
 func (g *doq) Act(seat int, a games.Action) error {
 	if g.over {
 		return games.ErrGameOver
+	}
+	if g.rebuying() {
+		if !g.rebuy[seat] {
+			if a.Type == "rebuy" || a.Type == "leave" {
+				return games.Errorf("You're not busted.")
+			}
+			return games.Errorf("Waiting for busted players to buy back in or sit out.")
+		}
+		switch a.Type {
+		case "rebuy":
+			g.st.Rebuy(seat)
+			g.env.Log(games.LogInfo, "%s bought back in for %d.", P(seat), g.st.Start)
+		case "leave":
+			g.st.Gone[seat] = true
+			g.env.Log(games.LogInfo, "%s is sitting out the rest of the game.", P(seat))
+		default:
+			return games.ErrUnknown
+		}
+		g.rebuy[seat] = false
+		if !g.rebuying() {
+			g.startRound(g.seats.Next(g.starter))
+		}
+		return nil
 	}
 	if g.claim == nil {
 		if seat != g.thrower {
@@ -210,6 +256,15 @@ func (g *doq) Act(seat int, a games.Action) error {
 		return nil
 	}
 	return games.ErrUnknown
+}
+
+func (g *doq) rebuying() bool {
+	for _, r := range g.rebuy {
+		if r {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *doq) draw(seat int, a games.Action) error {
@@ -308,10 +363,19 @@ func (g *doq) nextThrower(seat int) {
 	g.throw(next)
 }
 
+// award gives seat the pot, logging anything an all-in winner couldn't take.
+func (g *doq) award(seat int) (won, left int) {
+	won = g.pot.Award(&g.st, seat)
+	left = g.pot.Total()
+	if left > 0 {
+		g.env.Log(games.LogInfo, "%s was all-in, so %d stays in the pot.", P(seat), left)
+	}
+	return won, left
+}
+
 func (g *doq) takePot(seat int, why string) {
-	g.env.Log(games.LogGood, "%s takes the pot of %d — %s.", P(seat), g.pot, why)
-	g.chips[seat] += g.pot
-	g.pot = 0
+	won, _ := g.award(seat)
+	g.env.Log(games.LogGood, "%s takes %d from the pot — %s.", P(seat), won, why)
 	g.endRound()
 }
 
@@ -324,20 +388,23 @@ func (g *doq) challenge(seat int) {
 	}
 	g.env.Log(games.LogRoll, "%s challenged! %s showed %s (%s) against a claim of %s.",
 		P(seat), P(g.thrower), games.DiceText(g.dice), actual.Name, g.claim.Name)
+	loser := g.thrower
 	if honest {
-		res.Paid = g.pot
-		g.chips[seat] -= g.pot
-		g.pot *= 2
-		res.Won = g.pot
-		g.env.Log(games.LogBust, "The hand was there: %s doubled the pot to %d.", P(seat), g.pot)
-		g.env.Log(games.LogGood, "%s takes the pot of %d.", P(g.thrower), g.pot)
-		g.chips[g.thrower] += g.pot
-		g.pot = 0
+		loser = seat
+	}
+	owed := g.pot.Total()
+	res.Paid = g.st.PayInto(&g.pot, loser, owed)
+	res.AllIn = res.Paid < owed
+	short := ""
+	if res.AllIn {
+		short = fmt.Sprintf(" — all they had, %d of %d", res.Paid, owed)
+	}
+	if honest {
+		g.env.Log(games.LogBust, "The hand was there: %s doubled the pot%s.", P(seat), short)
+		res.Won, res.Left = g.award(g.thrower)
+		g.env.Log(games.LogGood, "%s takes %d.", P(g.thrower), res.Won)
 	} else {
-		res.Paid = g.pot
-		g.chips[g.thrower] -= g.pot
-		g.pot *= 2
-		g.env.Log(games.LogBust, "Caught bluffing: %s doubled the pot to %d. It carries over.", P(g.thrower), g.pot)
+		g.env.Log(games.LogBust, "Caught bluffing: %s doubled the pot to %d%s. It carries over.", P(g.thrower), g.pot.Total(), short)
 	}
 	g.last = res
 	g.endRound()
@@ -346,23 +413,50 @@ func (g *doq) challenge(seat int) {
 func (g *doq) endRound() {
 	g.claim, g.responder = nil, -1
 	if g.round >= g.rounds {
-		g.over = true
-		w := g.Winners()
-		if g.pot > 0 {
-			g.env.Log(games.LogInfo, "The last pot of %d goes unclaimed.", g.pot)
-		}
-		names := []string{}
-		for _, s := range w {
-			names = append(names, P(s))
-		}
-		g.env.Log(games.LogWin, "Most chips: %s with %d.", joinParts(names), g.chips[w[0]])
+		g.finish()
 		return
 	}
-	g.startRound(g.seats.Next(g.starter))
+	for _, s := range g.seats.Active() {
+		if g.st.Busted(s) {
+			g.rebuy[s] = true
+			g.env.Log(games.LogBust, "%s is busted.", P(s))
+		}
+	}
+	if !g.rebuying() {
+		g.startRound(g.seats.Next(g.starter))
+	}
+}
+
+func (g *doq) finish() {
+	g.over = true
+	g.claim, g.responder = nil, -1
+	if g.pot.Total() > 0 {
+		g.env.Log(games.LogInfo, "The last pot of %d is returned.", g.pot.Total())
+		g.pot.Refund(&g.st)
+	}
+	w := g.Winners()
+	names := []string{}
+	for _, s := range w {
+		names = append(names, P(s))
+	}
+	g.env.Log(games.LogWin, "Best result: %s at %s.", joinParts(names), signedInt(g.st.Net(w[0])))
+}
+
+func signedInt(n int) string {
+	if n > 0 {
+		return fmt.Sprintf("+%d", n)
+	}
+	return fmt.Sprint(n)
 }
 
 func (g *doq) Legal(seat int) []games.Action {
 	if g.over {
+		return nil
+	}
+	if g.rebuying() {
+		if g.rebuy[seat] {
+			return append([]games.Action{}, games.RebuyActions...)
+		}
 		return nil
 	}
 	if g.claim != nil {
@@ -399,6 +493,13 @@ func (g *doq) Remove(seat int) {
 	if g.over || g.seats.ActiveCount() < 2 {
 		return
 	}
+	if g.rebuying() {
+		g.rebuy[seat] = false
+		if !g.rebuying() {
+			g.startRound(g.seats.Next(g.starter))
+		}
+		return
+	}
 	g.passed[seat] = true
 	switch {
 	case g.claim == nil && seat == g.thrower:
@@ -431,10 +532,16 @@ type doqView struct {
 	Round       int         `json:"round"`
 	Rounds      int         `json:"rounds"`
 	Pot         int         `json:"pot"`
+	Start       int         `json:"start"`
 	Chips       []int       `json:"chips"`
+	BuyIns      []int       `json:"buyIns"`
+	Net         []int       `json:"net"`
+	AllIn       []bool      `json:"allIn"`
+	Gone        []bool      `json:"gone"`
+	Rebuy       []bool      `json:"rebuy"`
 	Passed      []bool      `json:"passed"`
 	Thrower     int         `json:"thrower"`
-	Phase       string      `json:"phase"` // "throw" | "respond"
+	Phase       string      `json:"phase"` // "throw" | "respond" | "rebuy"
 	Responder   int         `json:"responder"`
 	Drawn       bool        `json:"drawn"`
 	Dice        []int       `json:"dice"` // the thrower's dice: hidden ones are 0 for everyone else
@@ -449,14 +556,21 @@ type doqView struct {
 
 func (g *doq) View(seat int) interface{} {
 	v := doqView{
-		Round: g.round, Rounds: g.rounds, Pot: g.pot, Chips: games.Ints(g.chips),
-		Passed: append([]bool{}, g.passed...), Thrower: g.thrower, Responder: g.responder,
-		Drawn: g.drawn, Exposed: append([]bool{}, g.exposed...), Mine: seat == g.thrower && !g.over,
+		Round: g.round, Rounds: g.rounds, Pot: g.pot.Total(), Start: g.st.Start,
+		Chips: games.Ints(g.st.Chips), BuyIns: games.Ints(g.st.BuyIns), Net: g.st.Nets(),
+		AllIn: append([]bool{}, g.pot.AllIn...), Gone: append([]bool{}, g.st.Gone...),
+		Rebuy: append([]bool{}, g.rebuy...), Passed: append([]bool{}, g.passed...),
+		Thrower: g.thrower, Responder: g.responder, Drawn: g.drawn,
+		Exposed: append([]bool{}, g.exposed...), Mine: seat == g.thrower && !g.over && !g.rebuying(),
 		Claim: g.claim, ClaimDice: games.Ints(g.claimDice), Established: g.established, EstBy: g.estBy, Last: g.last,
 	}
-	v.Phase = "throw"
-	if g.claim != nil {
+	switch {
+	case g.rebuying():
+		v.Phase = "rebuy"
+	case g.claim != nil:
 		v.Phase = "respond"
+	default:
+		v.Phase = "throw"
 	}
 	v.Dice = make([]int, len(g.dice))
 	for i, d := range g.dice {
@@ -471,9 +585,15 @@ func (g *doq) Prompt(seat int) string {
 	if g.over {
 		return "The last round is over."
 	}
+	if g.rebuying() {
+		if seat >= 0 && g.rebuy[seat] {
+			return fmt.Sprintf("You're busted. Buy back in for %d chips, or sit out the rest of the game?", g.st.Start)
+		}
+		return "Waiting for busted players to buy back in or sit out."
+	}
 	if g.claim == nil {
 		if seat != g.thrower {
-			return fmt.Sprintf("Pot %d — %s is throwing.", g.pot, P(g.thrower))
+			return fmt.Sprintf("Pot %d — %s is throwing.", g.pot.Total(), P(g.thrower))
 		}
 		switch {
 		case !g.drawn && g.established != nil:
@@ -486,7 +606,7 @@ func (g *doq) Prompt(seat int) string {
 		return "Claim a hand — true or not."
 	}
 	if seat == g.responder {
-		return fmt.Sprintf("%s claims %s. Believe it or challenge? (Pot %d)", P(g.thrower), g.claim.Name, g.pot)
+		return fmt.Sprintf("%s claims %s. Believe it or challenge? (Pot %d)", P(g.thrower), g.claim.Name, g.pot.Total())
 	}
 	return fmt.Sprintf("%s claims %s — waiting for %s.", P(g.thrower), g.claim.Name, P(g.responder))
 }
@@ -495,6 +615,15 @@ func (g *doq) Waiting() []int {
 	if g.over {
 		return nil
 	}
+	if g.rebuying() {
+		out := []int{}
+		for s, r := range g.rebuy {
+			if r {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
 	if g.claim != nil {
 		return []int{g.responder}
 	}
@@ -502,11 +631,18 @@ func (g *doq) Waiting() []int {
 }
 
 func (g *doq) Badges() []string {
-	out := make([]string, len(g.chips))
-	for i, c := range g.chips {
-		out[i] = fmt.Sprintf("%d chips", c)
-		if !g.over && g.passed[i] && g.seats.In(i) {
-			out[i] += " · passed"
+	out := make([]string, g.seats.N)
+	for i := range out {
+		switch {
+		case g.st.Gone[i]:
+			out[i] = "sat out"
+		case g.st.Busted(i) && !g.over:
+			out[i] = "busted"
+		default:
+			out[i] = fmt.Sprintf("%d chips", g.st.Chips[i])
+			if !g.over && g.passed[i] && g.seats.In(i) {
+				out[i] += " · passed"
+			}
 		}
 	}
 	return out
@@ -518,5 +654,5 @@ func (g *doq) Winners() []int {
 	if !g.over {
 		return nil
 	}
-	return games.BestSeats(&g.seats, g.chips, false)
+	return games.BestSeats(&g.seats, g.st.Nets(), false)
 }

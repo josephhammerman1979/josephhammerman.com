@@ -37,7 +37,8 @@ func init() {
 			"Classic: the banker rolls five dice to set the point. Then each player rolls five dice — beat the banker's poker hand to win your bet; a worse hand or a tie pays the banker.",
 			"Gold Rush: each player rolls and may re-roll up to three dice once. The banker rolls last; seeing that roll, everyone chooses to stay, double their bet, or fold (lose half the bet, rounded up). Then the banker may re-roll up to three dice and the remaining bets settle.",
 			"Hands, best first: five of a kind, four of a kind, high straight (2–6), low straight (1–5), full house, three of a kind, two pair, pair, highest die.",
-			"Hit zero chips and you're out of Klondike. Most chips after the last banker wins.",
+			"Nobody goes below zero: you can only lose what you have, and a banker who runs dry pays winners in turn until the money's gone.",
+			"Hit zero and you're busted: sit out the rest of the round, then buy back in or sit out the game. Best result after buy-ins wins.",
 		},
 		Options: []games.Option{
 			{Key: "variant", Label: "Variant", Choices: []games.Choice{
@@ -78,6 +79,7 @@ const (
 	bkPlay   = "play"   // players roll in turn
 	bkBank   = "bank"   // goldrush: banker rolls last, then (after bkDecide) may re-roll
 	bkDecide = "decide" // goldrush: players stay / double / fold, simultaneously
+	bkRebuy  = "rebuy"  // busted players choose to buy back in or leave
 	bkOver   = "over"
 )
 
@@ -85,7 +87,8 @@ type klondike struct {
 	env      *games.Env
 	seats    games.Seats
 	gold     bool
-	chips    []int
+	st       games.Stacks
+	chips    []int // st.Chips (same slice)
 	rotation []int // banker for each round, in order
 	bankTurn int   // index into rotation
 	banker   int
@@ -102,8 +105,9 @@ type klondike struct {
 	result   []int    // +1 won, -1 lost, 0 not settled
 	choice   []string // goldrush decision: "", "stay", "double", "fold"
 
-	last    *bankerSummary
-	winners []int
+	last      *bankerSummary
+	winners   []int
+	rebuyWait []bool // busted players still choosing to rebuy or leave
 }
 
 // bankerSummary is the outcome of the last settled round, shown while the
@@ -114,7 +118,8 @@ type bankerSummary struct {
 	BankDice []int           `json:"bankDice"`
 	BankHand string          `json:"bankHand"`
 	Rows     []bankerLastRow `json:"rows"`
-	Net      int             `json:"net"` // banker's gain (negative = loss)
+	Net      int             `json:"net"`   // banker's gain (negative = loss)
+	Short    int             `json:"short"` // winnings the banker couldn't pay
 }
 
 type bankerLastRow struct {
@@ -123,6 +128,8 @@ type bankerLastRow struct {
 	Hand   string `json:"hand"`
 	Wager  int    `json:"wager"`
 	Result int    `json:"result"`
+	Paid   int    `json:"paid"`   // chips that actually changed hands
+	Short  bool   `json:"short"`  // a winner the banker couldn't pay in full
 	Choice string `json:"choice"` // goldrush: stay / double / fold
 }
 
@@ -133,10 +140,9 @@ func newKlondike(env *games.Env, n int, gold bool, startChips, banks int) *klond
 	if banks <= 0 {
 		banks = 1
 	}
-	g := &klondike{env: env, seats: games.NewSeats(n), gold: gold, chips: make([]int, n), banker: -1}
-	for i := range g.chips {
-		g.chips[i] = startChips
-	}
+	g := &klondike{env: env, seats: games.NewSeats(n), gold: gold, st: games.NewStacks(n, startChips), banker: -1}
+	g.chips = g.st.Chips
+	g.rebuyWait = make([]bool, n)
 	for b := 0; b < banks; b++ {
 		for s := 0; s < n; s++ {
 			g.rotation = append(g.rotation, s)
@@ -162,10 +168,10 @@ func (g *klondike) cur() int {
 
 func (g *klondike) nextRound() {
 	g.bankTurn++
-	for g.bankTurn < len(g.rotation) && !g.seats.In(g.rotation[g.bankTurn]) {
-		g.bankTurn++
+	for g.bankTurn < len(g.rotation) && !g.canPlay(g.rotation[g.bankTurn]) {
+		g.bankTurn++ // a busted or departed banker's turn is skipped
 	}
-	if g.bankTurn >= len(g.rotation) || g.seats.ActiveCount() < 2 {
+	if g.bankTurn >= len(g.rotation) || g.playable() < 2 {
 		g.finish()
 		return
 	}
@@ -181,7 +187,7 @@ func (g *klondike) nextRound() {
 	g.choice = make([]string, n)
 	g.order = nil
 	for _, s := range g.seats.OrderFrom(g.banker) {
-		if s != g.banker {
+		if s != g.banker && g.canPlay(s) {
 			g.order = append(g.order, s)
 		}
 	}
@@ -200,18 +206,39 @@ func (g *klondike) finish() {
 	}
 	for _, s := range pool {
 		switch {
-		case len(best) == 0 || g.chips[s] > g.chips[best[0]]:
+		case len(best) == 0 || g.st.Net(s) > g.st.Net(best[0]):
 			best = []int{s}
-		case g.chips[s] == g.chips[best[0]]:
+		case g.st.Net(s) == g.st.Net(best[0]):
 			best = append(best, s)
 		}
 	}
 	g.winners = best
 	if len(best) == 1 {
-		g.env.Log(games.LogWin, "%s wins with %s!", games.P(best[0]), plural(g.chips[best[0]], "chip", "chips"))
+		g.env.Log(games.LogWin, "%s wins, %s net!", games.P(best[0]), signed(g.st.Net(best[0])))
 	} else {
-		g.env.Log(games.LogWin, "%s share the win with %s each!", seatList(best), plural(g.chips[best[0]], "chip", "chips"))
+		g.env.Log(games.LogWin, "%s share the win at %s net each!", seatList(best), signed(g.st.Net(best[0])))
 	}
+}
+
+// canPlay reports whether seat can take part in a round: still at the
+// table, with chips, and not sitting out after busting.
+func (g *klondike) canPlay(seat int) bool { return g.seats.In(seat) && g.st.Funded(seat) }
+
+func (g *klondike) playable() int {
+	n := 0
+	for s := 0; s < g.seats.N; s++ {
+		if g.canPlay(s) {
+			n++
+		}
+	}
+	return n
+}
+
+func signed(n int) string {
+	if n > 0 {
+		return fmt.Sprintf("+%d", n)
+	}
+	return fmt.Sprint(n)
 }
 
 func (g *klondike) maxBet(seat int) int {
@@ -231,6 +258,20 @@ func (g *klondike) Act(seat int, a games.Action) error {
 		return games.ErrGameOver
 	}
 	switch a.Type {
+	case "rebuy", "leave":
+		if !g.needsRebuy(seat) {
+			return games.ErrUnknown
+		}
+		g.rebuyWait[seat] = false
+		if a.Type == "rebuy" {
+			g.st.Rebuy(seat)
+			g.env.Log(games.LogInfo, "%s bought back in for %d.", games.P(seat), g.st.Start)
+		} else {
+			g.st.Gone[seat] = true
+			g.env.Log(games.LogInfo, "%s is sitting out the rest of the game.", games.P(seat))
+		}
+		g.afterRebuys()
+		return nil
 	case "wager":
 		if g.phase != bkWager {
 			return games.Errorf("Bets are already down.")
@@ -454,6 +495,9 @@ func (g *klondike) nextTurn() {
 	g.skipOut()
 }
 
+// settle pays out the round.  Losers pay the banker first; then the banker
+// pays winners in turn order from their left, only from what they have —
+// nobody goes negative, so a winner late in the order may be paid short.
 func (g *klondike) settle() {
 	b := g.banker
 	bank := g.hand[b]
@@ -461,36 +505,54 @@ func (g *klondike) settle() {
 		Round: g.bankTurn + 1, Banker: b, BankDice: games.Ints(g.dice[b]), BankHand: bank.Name,
 		Rows: []bankerLastRow{},
 	}
+	rows := map[int]*bankerLastRow{}
+	played := []int{}
 	for _, s := range g.order {
 		if !g.seats.In(s) || !g.rolled[s] {
 			continue
 		}
+		played = append(played, s)
+		row := &bankerLastRow{Seat: s, Dice: games.Ints(g.dice[s]), Hand: g.hand[s].Name, Wager: g.wager[s], Choice: g.choice[s]}
+		rows[s] = row
 		w := g.wager[s]
-		if g.choice[s] == "fold" {
-			sum.Net += w // already paid
-			sum.Rows = append(sum.Rows, bankerLastRow{Seat: s, Dice: games.Ints(g.dice[s]), Hand: g.hand[s].Name, Wager: w, Result: -1, Choice: "fold"})
+		switch {
+		case g.choice[s] == "fold":
+			row.Result, row.Paid = -1, w // already paid
+			sum.Net += w
+		case games.CompareHands(g.hand[s], bank) <= 0:
+			paid, _ := g.st.Pay(s, w)
+			g.chips[b] += paid
+			g.result[s], row.Result, row.Paid = -1, -1, paid
+			sum.Net += paid
+			if g.gold {
+				g.env.Log(games.LogBust, "%s's %s doesn't beat the banker's %s: −%d", games.P(s), g.hand[s].Name, bank.Name, paid)
+			}
+		}
+	}
+	for _, s := range played {
+		row := rows[s]
+		if row.Result < 0 {
 			continue
 		}
-		if games.CompareHands(g.hand[s], bank) > 0 {
-			g.result[s] = 1
-			g.chips[s] += w
-			g.chips[b] -= w
-			sum.Net -= w
-			if g.gold {
-				g.env.Log(games.LogGood, "%s's %s beats the banker's %s: +%d", games.P(s), g.hand[s].Name, bank.Name, w)
-			}
-		} else {
-			g.result[s] = -1
-			g.chips[s] -= w
-			g.chips[b] += w
-			sum.Net += w
-			if g.gold {
-				g.env.Log(games.LogBust, "%s's %s doesn't beat the banker's %s: −%d", games.P(s), g.hand[s].Name, bank.Name, w)
-			}
+		w := g.wager[s]
+		paid, short := g.st.Pay(b, w)
+		g.chips[s] += paid
+		g.result[s], row.Result, row.Paid = 1, 1, paid
+		sum.Net -= paid
+		if short {
+			row.Short = true
+			sum.Short += w - paid
+			g.env.Log(games.LogBust, "%s's %s beats the banker's %s, but the banker could only pay %d of %d.", games.P(s), g.hand[s].Name, bank.Name, paid, w)
+		} else if g.gold {
+			g.env.Log(games.LogGood, "%s's %s beats the banker's %s: +%d", games.P(s), g.hand[s].Name, bank.Name, paid)
 		}
-		sum.Rows = append(sum.Rows, bankerLastRow{Seat: s, Dice: games.Ints(g.dice[s]), Hand: g.hand[s].Name, Wager: w, Result: g.result[s], Choice: g.choice[s]})
+	}
+	for _, s := range played {
+		sum.Rows = append(sum.Rows, *rows[s])
 	}
 	switch {
+	case sum.Short > 0:
+		g.env.Log(games.LogBust, "The bank (%s) ran dry — %d in winnings went unpaid.", games.P(b), sum.Short)
 	case sum.Net > 0:
 		g.env.Log(games.LogGood, "The bank (%s) won %d this round.", games.P(b), sum.Net)
 	case sum.Net < 0:
@@ -499,10 +561,42 @@ func (g *klondike) settle() {
 		g.env.Log(games.LogInfo, "The bank (%s) broke even this round.", games.P(b))
 	}
 	g.last = sum
+	g.endRound()
+}
+
+// endRound offers busted players a rebuy, or starts the next round.
+func (g *klondike) endRound() {
+	g.rebuyWait = make([]bool, g.seats.N)
+	if g.bankTurn+1 >= len(g.rotation) {
+		g.nextRound() // that was the last round
+		return
+	}
+	any := false
 	for _, s := range g.seats.Active() {
-		if g.chips[s] <= 0 {
-			g.seats.Out[s] = true
-			g.env.Log(games.LogBust, "%s is out of chips!", games.P(s))
+		if g.st.Busted(s) {
+			g.rebuyWait[s] = true
+			any = true
+			g.env.Log(games.LogBust, "%s is busted!", games.P(s))
+		}
+	}
+	if any {
+		g.phase = bkRebuy
+		return
+	}
+	g.nextRound()
+}
+
+func (g *klondike) needsRebuy(seat int) bool {
+	return g.phase == bkRebuy && g.seats.In(seat) && g.rebuyWait[seat]
+}
+
+func (g *klondike) afterRebuys() {
+	if g.phase != bkRebuy {
+		return
+	}
+	for s := range g.rebuyWait {
+		if g.needsRebuy(s) {
+			return
 		}
 	}
 	g.nextRound()
@@ -511,6 +605,9 @@ func (g *klondike) settle() {
 func (g *klondike) Legal(seat int) []games.Action {
 	if g.phase == bkOver {
 		return nil
+	}
+	if g.needsRebuy(seat) {
+		return append([]games.Action{}, games.RebuyActions...)
 	}
 	if g.needsWager(seat) {
 		out := []games.Action{}
@@ -549,6 +646,10 @@ func (g *klondike) Remove(seat int) {
 		g.finish()
 		return
 	}
+	if g.phase == bkRebuy {
+		g.afterRebuys()
+		return
+	}
 	if seat == g.banker {
 		g.env.Log(games.LogInfo, "The banker left — this round is called off and bets are returned.")
 		for _, s := range g.order {
@@ -573,6 +674,11 @@ func (g *klondike) Remove(seat int) {
 
 type bankerSeatView struct {
 	Chips    int    `json:"chips"`
+	BuyIns   int    `json:"buyIns"`
+	Net      int    `json:"net"`
+	Busted   bool   `json:"busted"` // on zero chips: sitting out this round
+	Gone     bool   `json:"gone"`   // chose to sit out the rest of the game
+	Rebuying bool   `json:"rebuying"`
 	Out      bool   `json:"out"`
 	Wager    int    `json:"wager"`   // -1 while hidden
 	Wagered  bool   `json:"wagered"` // has chosen a bet this round
@@ -601,6 +707,7 @@ type bankerView struct {
 	Order     []int            `json:"order"`
 	Seats     []bankerSeatView `json:"seats"`
 	MaxReroll int              `json:"maxReroll"`
+	Start     int              `json:"start"`
 	Last      *bankerSummary   `json:"last"`
 }
 
@@ -608,7 +715,7 @@ func (g *klondike) View(seat int) interface{} {
 	v := bankerView{
 		Variant: "classic", Phase: g.phase, Banker: g.banker, Current: g.cur(),
 		Round: g.bankTurn + 1, Rounds: len(g.rotation), Order: games.Ints(g.order),
-		MaxReroll: bankerMaxReroll, Last: g.last,
+		MaxReroll: bankerMaxReroll, Start: g.st.Start, Last: g.last,
 	}
 	if g.gold {
 		v.Variant = "goldrush"
@@ -617,7 +724,9 @@ func (g *klondike) View(seat int) interface{} {
 		v.Round = v.Rounds
 	}
 	for s := 0; s < g.seats.N; s++ {
-		sv := bankerSeatView{Chips: g.chips[s], Out: g.seats.Out[s], Wager: g.wager[s], Wagered: g.wager[s] > 0, MaxBet: g.maxBet(s)}
+		sv := bankerSeatView{Chips: g.chips[s], BuyIns: g.st.BuyIns[s], Net: g.st.Net(s),
+			Busted: g.st.Busted(s), Gone: g.st.Gone[s], Rebuying: g.needsRebuy(s),
+			Out: g.seats.Out[s], Wager: g.wager[s], Wagered: g.wager[s] > 0, MaxBet: g.maxBet(s)}
 		if g.phase == bkOver {
 			sv.Wager = 0
 		} else {
@@ -651,12 +760,17 @@ func (g *klondike) View(seat int) interface{} {
 func (g *klondike) Prompt(seat int) string {
 	if g.phase == bkOver {
 		if len(g.winners) == 1 {
-			return fmt.Sprintf("%s wins with %s!", games.P(g.winners[0]), plural(g.chips[g.winners[0]], "chip", "chips"))
+			return fmt.Sprintf("%s wins, %s net!", games.P(g.winners[0]), signed(g.st.Net(g.winners[0])))
 		}
 		return fmt.Sprintf("%s share the win!", seatList(g.winners))
 	}
 	b := games.P(g.banker)
 	switch g.phase {
+	case bkRebuy:
+		if g.needsRebuy(seat) {
+			return fmt.Sprintf("You're busted. Buy back in for %d chips, or sit out the rest of the game?", g.st.Start)
+		}
+		return fmt.Sprintf("Waiting for %s to buy back in or sit out.", seatList(g.Waiting()))
 	case bkWager:
 		if g.needsWager(seat) {
 			return fmt.Sprintf("Bet 1–%d chips against the banker, %s.", g.maxBet(seat), b)
@@ -727,6 +841,15 @@ func (g *klondike) Waiting() []int {
 		}
 		return out
 	}
+	if g.phase == bkRebuy {
+		out := []int{}
+		for s := 0; s < g.seats.N; s++ {
+			if g.needsRebuy(s) {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
 	return []int{g.cur()}
 }
 
@@ -735,6 +858,14 @@ func (g *klondike) Badges() []string {
 	for s := range out {
 		if g.seats.Out[s] {
 			out[s] = "out"
+			continue
+		}
+		if g.st.Gone[s] {
+			out[s] = "sat out"
+			continue
+		}
+		if g.st.Busted(s) {
+			out[s] = "busted"
 			continue
 		}
 		out[s] = plural(g.chips[s], "chip", "chips")

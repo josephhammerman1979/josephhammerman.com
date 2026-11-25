@@ -173,7 +173,7 @@ func TestMidnightRound(t *testing.T) {
 		6, 6, 6, 6, // ...no 1 and 4: doesn't qualify
 		1, 4, 6, 6, 6, 6, // third: 24, tie
 		2, 5, // roll-off: first player 2, third 5
-	), 3, 1)
+	), 3, 1, nil)
 	order := g.Order
 	mustAct(t, g, order[0], roll())
 	mustAct(t, g, order[0], keepAll(6))
@@ -191,8 +191,8 @@ func TestMidnightRound(t *testing.T) {
 	if !g.Over() || g.Winners()[0] != order[2] || g.wins[order[2]] != 1 {
 		t.Fatalf("expected %d to win the roll-off: wins=%v", order[2], g.wins)
 	}
-	if g.chips[order[2]] != 2 || g.chips[order[0]] != -1 || g.chips[order[1]] != -1 || g.pot != 0 || g.last.Pot != 3 {
-		t.Fatalf("winner should take the pot of 3: chips=%v pot=%d", g.chips, g.pot)
+	if g.ct.St.Chips[order[2]] != 22 || g.ct.St.Chips[order[0]] != 19 || g.ct.St.Chips[order[1]] != 19 || g.ct.Pot.Total() != 0 || g.last.Pot != 3 {
+		t.Fatalf("winner should take the pot of 3: chips=%v pot=%d", g.ct.St.Chips, g.ct.Pot.Total())
 	}
 	if g.last.Scores[order[1]] != -1 || g.last.Scores[order[0]] != 24 {
 		t.Fatalf("round scores %v", g.last.Scores)
@@ -200,7 +200,7 @@ func TestMidnightRound(t *testing.T) {
 }
 
 func TestMidnightNobodyQualifiesAndRotation(t *testing.T) {
-	g := newMidnight(games.NewTestEnv(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2), 3, 3)
+	g := newMidnight(games.NewTestEnv(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2), 3, 3, nil)
 	first := g.first
 	for i := 0; i < 3; i++ {
 		s := g.cur()
@@ -210,8 +210,8 @@ func TestMidnightNobodyQualifiesAndRotation(t *testing.T) {
 	if g.round != 2 || g.last.Winner != -1 || g.wins[0]+g.wins[1]+g.wins[2] != 0 {
 		t.Fatalf("round=%d winner=%d wins=%v", g.round, g.last.Winner, g.wins)
 	}
-	if g.pot != 6 || g.chips[0] != -2 {
-		t.Fatalf("pot should carry over: pot=%d chips=%v", g.pot, g.chips)
+	if g.ct.Pot.Total() != 6 || g.ct.St.Chips[0] != 18 {
+		t.Fatalf("pot should carry over: pot=%d chips=%v", g.ct.Pot.Total(), g.ct.St.Chips)
 	}
 	if g.first != (first+1)%3 {
 		t.Fatalf("round 2 first = %d, want %d", g.first, (first+1)%3)
@@ -369,16 +369,16 @@ func TestThreesScoringAndTieReplay(t *testing.T) {
 		6, 6, 6, 6, 5, // seat 2: 29
 		1, 1, 1, 1, 1, // replay, seat 0: 5
 		3, 3, 3, 3, 1, // replay, seat 1: 1 → wins
-	), 3, 5)
-	if g.pot != 3 || g.chips[0] != -1 {
-		t.Fatalf("ante: pot=%d chips=%v", g.pot, g.chips)
+	), 3, 5, nil)
+	if g.ct.Pot.Total() != 3 || g.ct.St.Chips[0] != 19 {
+		t.Fatalf("ante: pot=%d chips=%v", g.ct.Pot.Total(), g.ct.St.Chips)
 	}
 	for s := 0; s < 3; s++ {
 		mustAct(t, g, s, roll())
 		mustAct(t, g, s, keepAll(5))
 	}
-	if g.replay != 1 || g.pot != 5 || g.cur() != 0 || len(activeIn(g.Order, &g.seats)) != 2 {
-		t.Fatalf("tie replay: replay=%d pot=%d cur=%d order=%v", g.replay, g.pot, g.cur(), g.Order)
+	if g.replay != 1 || g.ct.Pot.Total() != 5 || g.cur() != 0 || len(activeIn(g.Order, &g.seats)) != 2 {
+		t.Fatalf("tie replay: replay=%d pot=%d cur=%d order=%v", g.replay, g.ct.Pot.Total(), g.cur(), g.Order)
 	}
 	if err := g.Act(2, roll()); err == nil {
 		t.Fatal("seat 2 isn't in the replay")
@@ -388,23 +388,23 @@ func TestThreesScoringAndTieReplay(t *testing.T) {
 	mustAct(t, g, 1, roll())
 	mustAct(t, g, 1, keepAll(5))
 	// Seat 1 paid 2 and won 5; then everyone antes for hand 2.
-	if g.chips[1] != 2 || g.chips[0] != -3 || g.chips[2] != -2 || g.hand != 2 || g.cur() != 1 || g.pot != 3 {
-		t.Fatalf("after replay: chips=%v hand=%d cur=%d pot=%d", g.chips, g.hand, g.cur(), g.pot)
+	if g.ct.St.Chips[1] != 22 || g.ct.St.Chips[0] != 17 || g.ct.St.Chips[2] != 18 || g.hand != 2 || g.cur() != 1 || g.ct.Pot.Total() != 3 {
+		t.Fatalf("after replay: chips=%v hand=%d cur=%d pot=%d", g.ct.St.Chips, g.hand, g.cur(), g.ct.Pot.Total())
 	}
 }
 
 func TestThreesShootTheMoon(t *testing.T) {
-	g := newThrees(games.NewTestEnv(6, 6, 6, 1, 1, 6, 6), 3, 1)
+	g := newThrees(games.NewTestEnv(6, 6, 6, 1, 1, 6, 6), 3, 1, nil)
 	mustAct(t, g, 0, roll())
 	mustAct(t, g, 0, keep(0, 1, 2))
 	mustAct(t, g, 0, keep(0, 1))
-	if !g.Over() || g.Winners()[0] != 0 || g.chips[0] != 2 {
-		t.Fatalf("moon should win instantly: over=%v chips=%v", g.Over(), g.chips)
+	if !g.Over() || g.Winners()[0] != 0 || g.ct.St.Chips[0] != 22 {
+		t.Fatalf("moon should win instantly: over=%v chips=%v", g.Over(), g.ct.St.Chips)
 	}
 }
 
 func TestThreesRemoveDuringReplay(t *testing.T) {
-	g := newThrees(games.NewTestEnv(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 6, 6, 5), 3, 5)
+	g := newThrees(games.NewTestEnv(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 6, 6, 5), 3, 5, nil)
 	for s := 0; s < 3; s++ {
 		mustAct(t, g, s, roll())
 		mustAct(t, g, s, keepAll(5))
@@ -413,7 +413,7 @@ func TestThreesRemoveDuringReplay(t *testing.T) {
 		t.Fatalf("expected a replay between seats 0 and 1")
 	}
 	g.Remove(0)
-	if g.replay != 0 || g.hand != 2 || g.starter != 1 || g.chips[1] != 2 {
-		t.Fatalf("last one left in the replay should win: hand=%d starter=%d chips=%v", g.hand, g.starter, g.chips)
+	if g.replay != 0 || g.hand != 2 || g.starter != 1 || g.ct.St.Chips[1] != 22 {
+		t.Fatalf("last one left in the replay should win: hand=%d starter=%d chips=%v", g.hand, g.starter, g.ct.St.Chips)
 	}
 }

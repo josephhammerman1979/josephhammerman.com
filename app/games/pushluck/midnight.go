@@ -19,14 +19,15 @@ func init() {
 		MinPlayers: 3, MaxPlayers: 8,
 		Options: []games.Option{{Key: "rounds", Label: "Rounds", Choices: []games.Choice{
 			{Value: "5", Label: "5 rounds"}, {Value: "3", Label: "3 rounds"}, {Value: "7", Label: "7 rounds"},
-		}}},
+		}}, chipsOption},
 		Rules: []string{
 			"Each round everyone antes 1 chip into the pot.",
 			"On your turn roll all six dice. After every roll keep at least one die (tap it), then roll the rest, until all six are kept.",
 			"Your hand only counts if it includes a 1 and a 4.",
 			"A qualifying hand scores the other four dice added up — 24 (four 6s) is the best.",
 			"Highest qualifying hand takes the pot (ties roll off). If nobody qualifies, the pot carries over to the next round.",
-			"Most chips after the last round wins the game.",
+			"You can only lose what you have: short of the ante, you're all-in and can only win back your own stake from each player.",
+			"Out of chips: buy back in or sit out the game. Best result after buy-ins wins after the last round.",
 		},
 		Facts: []string{"Number of dice: 6", "Player count: 3-8", "Object: Win each round, typically played for  money stakes"},
 		Sheet: []string{
@@ -35,7 +36,7 @@ func init() {
 			"The highest valid scoring hand every round wins the pot. Ties are decided through a roll off.",
 		},
 		New: func(env *games.Env, n int, opts map[string]string) games.Game {
-			return newMidnight(env, n, atoiDefault(opts["rounds"], 5, 3, 5, 7))
+			return newMidnight(env, n, atoiDefault(opts["rounds"], 5, 3, 5, 7), opts)
 		},
 	})
 }
@@ -70,40 +71,43 @@ type midnight struct {
 	hands  [][]int // kept dice this round, per seat; nil = not played yet
 	scores []int   // this round, per seat
 	wins   []int
-	chips  []int // net chips, per seat
-	pot    int
+	ct     chipTable
 	carry  int // chips in this round's pot carried over from earlier rounds
 	last   *roundResult
 	winner int
 }
 
-func newMidnight(env *games.Env, n, rounds int) *midnight {
-	g := &midnight{env: env, seats: games.NewSeats(n), rounds: rounds, wins: make([]int, n), chips: make([]int, n), winner: -1}
+func newMidnight(env *games.Env, n, rounds int, opts map[string]string) *midnight {
+	g := &midnight{env: env, seats: games.NewSeats(n), rounds: rounds, wins: make([]int, n), ct: newChipTable(n, opts), winner: -1}
+	g.hands, g.scores = make([][]int, n), intsOf(n, -1)
 	g.startRound()
 	return g
 }
 
 func (g *midnight) startRound() {
-	g.round++
-	if g.round == 1 {
+	if g.round == 0 {
 		act := g.seats.Active()
 		g.first = act[g.env.Rand.Intn(len(act))]
 	} else {
 		g.first = g.seats.Next(g.first)
 	}
+	order := g.ct.playersFrom(g.first, &g.seats)
+	if len(order) < 2 {
+		g.finish()
+		return
+	}
+	g.round++
+	g.first = order[0]
 	g.hands = make([][]int, g.seats.N)
 	g.scores = intsOf(g.seats.N, -1)
 	g.turn = newKeepTurn(6)
-	g.start(g.seats.OrderFrom(g.first), &g.seats)
-	carried := g.pot
+	g.start(order, &g.seats)
+	carried := g.ct.Pot.Total()
 	g.carry = carried
-	for _, s := range g.Order {
-		g.chips[s]--
-		g.pot++
-	}
-	ante := fmt.Sprintf("everyone antes 1 (pot %d)", g.pot)
+	g.ct.ante(order, 1)
+	ante := fmt.Sprintf("everyone antes 1 (pot %d)", g.ct.Pot.Total())
 	if carried > 0 {
-		ante = fmt.Sprintf("everyone antes 1 — pot %d, including %d carried over", g.pot, carried)
+		ante = fmt.Sprintf("everyone antes 1 — pot %d, including %d carried over", g.ct.Pot.Total(), carried)
 	}
 	g.env.Log(games.LogInfo, "Round %d of %d — %s. %s rolls first", g.round, g.rounds, ante, games.P(g.first))
 }
@@ -111,6 +115,15 @@ func (g *midnight) startRound() {
 func (g *midnight) Act(seat int, a games.Action) error {
 	if g.winner >= 0 {
 		return games.ErrGameOver
+	}
+	if g.ct.rebuying() {
+		if err := g.ct.decide(g.env, seat, a); err != nil {
+			return err
+		}
+		if !g.ct.rebuying() {
+			g.startRound()
+		}
+		return nil
 	}
 	if seat != g.cur() {
 		return games.ErrNotYourTurn
@@ -190,31 +203,40 @@ func (g *midnight) endRound() {
 		}
 	}
 	if len(best) == 0 {
-		g.env.Log(games.LogBust, "Round %d: nobody qualified — the pot of %d carries over", g.round, g.pot)
+		g.env.Log(games.LogBust, "Round %d: nobody qualified — the pot of %d carries over", g.round, g.ct.Pot.Total())
 	} else {
 		w := pickWinner(g.env, best)
 		g.wins[w]++
 		res.Winner = w
-		res.Pot = g.pot
-		g.chips[w] += g.pot
-		g.env.Log(games.LogGood, "%s wins round %d with %d and takes the pot of %d (chips %s)", games.P(w), g.round, top, g.pot, signed(g.chips[w]))
-		g.pot = 0
+		won := g.ct.award(g.env, w)
+		res.Pot = won
+		g.env.Log(games.LogGood, "%s wins round %d with %d and takes %d (now %d chips)", games.P(w), g.round, top, won, g.ct.St.Chips[w])
 	}
 	g.last = res
+	g.Order, g.Pos = nil, 0
 	if g.round >= g.rounds {
-		if g.pot > 0 {
-			g.env.Log(games.LogInfo, "The last round had no winner — the pot of %d goes unclaimed", g.pot)
-		}
-		w := pickWinner(g.env, games.BestSeats(&g.seats, g.chips, false))
-		g.winner = w
-		g.env.Log(games.LogWin, "%s wins the game with %s chips!", games.P(w), signed(g.chips[w]))
+		g.finish()
 		return
+	}
+	if g.ct.markBusted(g.env, &g.seats) {
+		return // wait for the rebuy decisions
 	}
 	g.startRound()
 }
 
+func (g *midnight) finish() {
+	g.Order, g.Pos = nil, 0
+	g.winner = g.ct.finish(g.env, &g.seats)
+}
+
 func (g *midnight) Legal(seat int) []games.Action {
-	if g.winner >= 0 || seat != g.cur() {
+	if g.winner >= 0 {
+		return nil
+	}
+	if g.ct.rebuying() {
+		return g.ct.legal(seat)
+	}
+	if seat != g.cur() {
 		return nil
 	}
 	return g.turn.legal()
@@ -225,46 +247,57 @@ func (g *midnight) Remove(seat int) {
 	if g.winner >= 0 {
 		return
 	}
+	if g.ct.rebuying() {
+		g.ct.Rebuy[seat] = false
+		if !g.ct.rebuying() {
+			g.startRound()
+		}
+		return
+	}
 	if seat == g.cur() {
 		g.advance()
 	}
 }
 
 type midnightView struct {
-	Round   int          `json:"round"`
-	Rounds  int          `json:"rounds"`
-	First   int          `json:"first"`
-	Current int          `json:"current"`
-	Kept    []int        `json:"kept"`
-	Roll    []int        `json:"roll"`
-	Rolls   int          `json:"rolls"`
-	Hands   [][]int      `json:"hands"`
-	Scores  []int        `json:"scores"`
-	Wins    []int        `json:"wins"`
-	Chips   []int        `json:"chips"`
-	Pot     int          `json:"pot"`
-	Carried int          `json:"carried"`
-	Last    *roundResult `json:"last"`
-	Over    bool         `json:"over"`
+	Round   int     `json:"round"`
+	Rounds  int     `json:"rounds"`
+	First   int     `json:"first"`
+	Current int     `json:"current"`
+	Kept    []int   `json:"kept"`
+	Roll    []int   `json:"roll"`
+	Rolls   int     `json:"rolls"`
+	Hands   [][]int `json:"hands"`
+	Scores  []int   `json:"scores"`
+	Wins    []int   `json:"wins"`
+	chipView
+	Pot      int          `json:"pot"`
+	Rebuying bool         `json:"rebuying"`
+	Carried  int          `json:"carried"`
+	Last     *roundResult `json:"last"`
+	Over     bool         `json:"over"`
 }
 
 func (g *midnight) View(seat int) interface{} {
 	return midnightView{
 		Round: g.round, Rounds: g.rounds, First: g.first, Current: g.cur(),
 		Kept: games.Ints(g.turn.Kept), Roll: games.Ints(g.turn.Roll), Rolls: g.turn.Rolls,
-		Hands: copyHands(g.hands), Scores: games.Ints(g.scores), Wins: games.Ints(g.wins), Chips: games.Ints(g.chips), Pot: g.pot, Carried: g.carry,
+		Hands: copyHands(g.hands), Scores: games.Ints(g.scores), Wins: games.Ints(g.wins), chipView: g.ct.view(), Pot: g.ct.Pot.Total(), Rebuying: g.ct.rebuying(), Carried: g.carry,
 		Last: g.last, Over: g.winner >= 0,
 	}
 }
 
 func (g *midnight) Prompt(seat int) string {
 	if g.winner >= 0 {
-		return fmt.Sprintf("%s wins with %s chips!", games.P(g.winner), signed(g.chips[g.winner]))
+		return fmt.Sprintf("%s wins, %s net!", games.P(g.winner), signed(g.ct.St.Net(g.winner)))
+	}
+	if g.ct.rebuying() {
+		return g.ct.rebuyPrompt(seat)
 	}
 	cur := g.cur()
 	if seat != cur {
 		if !g.turn.started() {
-			return fmt.Sprintf("Waiting for %s to roll (round %d of %d, pot %d).", games.P(cur), g.round, g.rounds, g.pot)
+			return fmt.Sprintf("Waiting for %s to roll (round %d of %d, pot %d).", games.P(cur), g.round, g.rounds, g.ct.Pot.Total())
 		}
 		return fmt.Sprintf("%s is choosing dice to keep — %s.", games.P(cur), g.keptStatus())
 	}
@@ -275,7 +308,13 @@ func (g *midnight) Prompt(seat int) string {
 }
 
 func (g *midnight) Waiting() []int {
-	if g.winner >= 0 || g.cur() < 0 {
+	if g.winner >= 0 {
+		return nil
+	}
+	if g.ct.rebuying() {
+		return g.ct.waiting()
+	}
+	if g.cur() < 0 {
 		return nil
 	}
 	return []int{g.cur()}
@@ -284,7 +323,7 @@ func (g *midnight) Waiting() []int {
 func (g *midnight) Badges() []string {
 	out := make([]string, g.seats.N)
 	for i := range out {
-		out[i] = signed(g.chips[i]) + " chips"
+		out[i] = g.ct.badge(i)
 		if g.hands[i] != nil && g.winner < 0 {
 			if g.scores[i] < 0 {
 				out[i] += " · no 1-4"
